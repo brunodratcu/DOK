@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>DOK</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dok.css') }}">
+</head>
+<body>
+    <div class="dok-screen">
+        <!-- Barra superior -->
+        <header class="dok-header">
+            <button class="icon-btn" id="menu-toggle" aria-label="Abrir menu">☰</button>
+            <a class="icon-btn" href="/" aria-label="Voltar">←</a>
+            <div class="dok-tabs">
+                <button class="tab-btn active" data-tab="chats">Chats</button>
+                <button class="tab-btn" data-tab="projetos">Projetos</button>
+            </div>
+        </header>
+
+        <div class="dok-body">
+            <!-- Sidebar / drawer de conversas -->
+            <aside class="chat-drawer" id="chat-drawer">
+                <button class="new-chat-btn" id="new-chat-btn">+ Nova conversa</button>
+                <div class="chat-list" id="chat-list">
+                    <p class="chat-list-empty" id="chat-list-empty" hidden>
+                        Nenhuma conversa ainda.
+                    </p>
+                </div>
+            </aside>
+            <div class="drawer-overlay" id="drawer-overlay"></div>
+
+            <!-- Painel Chats -->
+            <main class="tab-panel" id="panel-chats">
+                <div class="messages" id="messages">
+                    <p class="empty-chat-msg" id="empty-chat-msg">
+                        Toque em <strong>+ Nova conversa</strong> ou escreva
+                        abaixo pra começar a falar com o DOK.
+                    </p>
+                </div>
+
+                <form class="composer" id="composer">
+                    <textarea
+                        id="message-input"
+                        class="message-input"
+                        placeholder="Escreva pro DOK…"
+                        rows="1"
+                    ></textarea>
+                    <button type="submit" class="send-btn" id="send-btn" aria-label="Enviar">➤</button>
+                </form>
+            </main>
+
+            <!-- Painel Projetos -->
+            <main class="tab-panel" id="panel-projetos" hidden>
+                <div class="messages" id="projects-messages">
+                    <p class="empty-chat-msg" id="empty-projects-msg">
+                        Aqui o DOK pode <strong>checar de verdade</strong>:
+                        rede, sites, dispositivos na sua rede, domínios.
+                        Ex: "o site tal está no ar?"
+                    </p>
+                </div>
+
+                <form class="composer" id="projects-composer">
+                    <textarea
+                        id="projects-input"
+                        class="message-input"
+                        placeholder="Peça um diagnóstico pro DOK…"
+                        rows="1"
+                    ></textarea>
+                    <button type="submit" class="send-btn" id="projects-send-btn" aria-label="Enviar">➤</button>
+                </form>
+            </main>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dok.js') }}"></script>
+</body>
+</html>

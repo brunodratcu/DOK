@@ -1,0 +1,8 @@
+config/config.yaml
+data/*.json
+data/*.db
+*.zip
+dist/
+build/
+__pycache__/
+venv/

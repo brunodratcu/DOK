@@ -1,0 +1,8 @@
+#!/bin/bash
+# Atalho: roda o CLI do DOK usando o venv do projeto, se existir.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$DIR/venv/bin/python3" ]; then
+    "$DIR/venv/bin/python3" "$DIR/dok_cli.py" "$@"
+else
+    python3 "$DIR/dok_cli.py" "$@"
+fi

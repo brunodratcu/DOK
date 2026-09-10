@@ -1,0 +1,338 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+body {
+    background: #0a0a0c;
+    color: #f2f2f0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.screen {
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.brand-tag {
+    position: absolute;
+    top: 4vh;
+    left: 6vw;
+}
+
+.brand {
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: #ff6b1a;
+    text-transform: uppercase;
+}
+
+.hero {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.2vh;
+}
+
+.clock {
+    font-size: 11rem;
+    font-weight: 200;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.date {
+    font-size: 1.2rem;
+    color: #8a8a8a;
+    text-transform: capitalize;
+    letter-spacing: 0.05em;
+}
+
+.weather {
+    margin-top: 3vh;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+}
+
+.weather-temp {
+    font-size: 2.4rem;
+    font-weight: 600;
+    color: #ff6b1a;
+}
+
+.weather-desc {
+    font-size: 1.1rem;
+    color: #c8c8c8;
+    text-transform: capitalize;
+}
+
+/* --- Dock de ícones --- */
+
+.dock {
+    position: absolute;
+    bottom: 5vh;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6vw;
+}
+
+.dock-btn {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    background: #16161a;
+    border: 1px solid #26262c;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+    text-decoration: none;
+}
+
+.dock-btn:active {
+    transform: scale(0.92);
+    border-color: #ff6b1a;
+}
+
+.dock-glyph {
+    font-size: 1.8rem;
+    color: #ff6b1a;
+}
+
+.dock-glyph.mic {
+    color: #4ade80;
+}
+
+.dock-glyph.dok-icon {
+    color: #60a5fa;
+}
+
+/* --- Toast --- */
+
+.toast {
+    position: fixed;
+    bottom: 16vh;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: #1f1f24;
+    border: 1px solid #ff6b1a;
+    padding: 14px 22px;
+    border-radius: 14px;
+    font-size: 0.9rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    max-width: 80vw;
+    text-align: center;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* --- Modal de créditos --- */
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+}
+
+.modal-backdrop.show {
+    display: flex;
+}
+
+.modal-card {
+    background: #16161a;
+    border: 1px solid #26262c;
+    border-radius: 24px;
+    padding: 5vh 6vw;
+    max-width: 480px;
+    width: 85vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    text-align: center;
+}
+
+.modal-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #ff6b1a;
+    letter-spacing: 0.05em;
+}
+
+.modal-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.qr-img {
+    width: 200px;
+    height: 200px;
+    border-radius: 12px;
+    background: #fff;
+    padding: 10px;
+}
+
+.qr-hint {
+    font-size: 0.85rem;
+    color: #8a8a8a;
+    max-width: 32ch;
+}
+
+.modal-close {
+    margin-top: 8px;
+    background: transparent;
+    border: 1px solid #26262c;
+    color: #f2f2f0;
+    padding: 10px 28px;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+/* --- Monitor de uso/custo (dentro do modal de créditos) --- */
+
+.usage-monitor {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.usage-subtitle {
+    font-size: 0.85rem;
+    color: #8a8a8a;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.usage-section {
+    background: #101013;
+    border: 1px solid #26262c;
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+}
+
+.usage-section-title {
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    color: #ff6b1a;
+    margin-bottom: 8px;
+}
+
+.usage-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.85rem;
+    padding: 3px 0;
+}
+
+.usage-row span {
+    color: #8a8a8a;
+}
+
+.usage-row strong {
+    color: #f2f2f0;
+    font-weight: 600;
+}
+
+.usage-progress {
+    background: #0a0a0c;
+    border-radius: 999px;
+    height: 8px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.usage-progress span {
+    display: block;
+    height: 100%;
+    background: #ff6b1a;
+    border-radius: 999px;
+}
+
+.usage-percent {
+    font-size: 0.75rem;
+    color: #8a8a8a;
+    text-align: right;
+    margin-top: 4px;
+}
+
+.usage-warning {
+    margin-top: 8px;
+    font-size: 0.8rem;
+    color: #f97316;
+    font-weight: 600;
+}
+
+.usage-model {
+    padding: 6px 0;
+    border-bottom: 1px solid #1c1c20;
+}
+
+.usage-model:last-child {
+    border-bottom: none;
+}
+
+.usage-model-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.usage-model-meta {
+    font-size: 0.75rem;
+    color: #8a8a8a;
+}
+
+.usage-muted {
+    font-size: 0.8rem;
+    color: #8a8a8a;
+    text-align: center;
+    padding: 8px 0;
+}
+
+.usage-note {
+    font-size: 0.7rem;
+    color: #6a6a6a;
+    text-align: center;
+    margin-top: 6px;
+}
+
+.usage-billing {
+    display: block;
+    text-align: center;
+    margin-top: 10px;
+    color: #ff6b1a;
+    font-size: 0.85rem;
+    text-decoration: none;
+}

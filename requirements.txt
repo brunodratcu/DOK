@@ -1,0 +1,7 @@
+Flask==3.0.3
+PyYAML==6.0.2
+requests==2.32.3
+qrcode[pil]==7.4.2
+pywebview==5.3.2
+pyinstaller==6.10.0
+fastmcp==4.0.3

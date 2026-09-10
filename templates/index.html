@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>DOK</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="screen">
+        <div class="brand-tag">
+            <span class="brand">{{ dok_name }}</span>
+        </div>
+
+        <main class="hero">
+            <div class="clock" id="clock">--:--</div>
+            <div class="date" id="date">-- --- ----</div>
+
+            <div class="weather" id="weather">
+                <span class="weather-temp" id="weather-temp">--°</span>
+                <span class="weather-desc" id="weather-desc">carregando clima…</span>
+            </div>
+        </main>
+
+        <nav class="dock">
+            <a class="dock-btn" href="/dok" aria-label="Abrir DOK">
+                <span class="dock-glyph dok-icon">◆</span>
+            </a>
+            <button class="dock-btn" id="voice-btn" aria-label="Falar com DOK">
+                <span class="dock-glyph mic">●</span>
+            </button>
+            <button class="dock-btn" id="credits-btn" aria-label="Créditos">
+                <span class="dock-glyph">◈</span>
+            </button>
+        </nav>
+
+        <div class="toast" id="toast"></div>
+
+        <div class="modal-backdrop" id="credits-modal">
+            <div class="modal-card">
+                <div class="modal-title">Créditos</div>
+                <div class="modal-body" id="credits-body">
+                    <p id="credits-msg">Carregando…</p>
+                    <img id="credits-qr" class="qr-img" alt="QR code para comprar créditos" hidden>
+                    <p class="qr-hint" id="qr-hint" hidden>Aponte a câmera do celular pra comprar mais créditos, sem digitar nada aqui.</p>
+                </div>
+                <button class="modal-close" id="credits-close">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

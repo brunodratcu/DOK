@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DOK
+Comment=Diagnostic of Kings
+Exec=/home/pi/dok/dist/dok
+Icon=/home/pi/dok/static/icon/dok.png
+Terminal=false
+Categories=Utility;
