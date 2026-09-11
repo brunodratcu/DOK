@@ -71,17 +71,71 @@ Desktop, adicione:
 }
 ```
 
+## Oráculo — leitura de mangá (PDF) com IA de visão
+
+Três ferramentas extras, separadas das 4 de diagnóstico:
+
+- **`oracle_ingest_tool(folder_path)`** — processa uma pasta com PDFs
+  organizados por obra (subpasta) e capítulo (nome do arquivo). Pode
+  demorar bastante (é IA de visão, página por página) — salva o
+  progresso a cada capítulo, então dá pra interromper sem perder nada.
+- **`oracle_query_tool(work=None)`** — consulta o que já foi
+  processado (resumo geral da obra + lista de capítulos)
+- **`oracle_status_tool()`** — quantos capítulos de cada obra já
+  foram processados
+
+**Convenção de pastas esperada:**
+```
+pasta_raiz/
+├── nng/
+│   ├── capitulo_001.pdf
+│   └── capitulo_002.pdf
+├── tbv/
+│   └── capitulo_007.pdf
+└── ds/
+    └── capitulo_012.pdf
+```
+O nome da subpasta vira o identificador da obra; o número do
+capítulo é extraído do nome do arquivo (primeira sequência de dígitos
+encontrada).
+
+**Armazenamento:** um único arquivo, `data/oracle/knowledge.json` —
+por obra, contém o resumo geral (atualizado incrementalmente a cada
+capítulo novo) e os capítulos processados. Não é um arquivo por
+capítulo — de propósito, pra manter poucos arquivos no disco.
+
+**Configuração própria:** o Oráculo precisa de uma chave da Anthropic
+só dele, em `config/config.yaml` (dentro do `dok-tools`, separado da
+chave do DOK):
+```yaml
+anthropic:
+  api_key: "sk-ant-..."
+  model: "claude-haiku-4-5-20251001"
+```
+
+**Custo:** cada capítulo processado é 1 chamada de visão (todas as
+páginas do capítulo juntas) + 1 chamada de texto (pra atualizar o
+resumo geral). Pra um volume grande (~150 capítulos), estime de
+antemão antes de rodar tudo de uma vez — não tem limite de orçamento
+embutido nesta ferramenta.
+
 ## Estrutura
 
 ```
 dok-tools/
-├── server.py              # servidor MCP — registra as 4 ferramentas
+├── server.py              # servidor MCP — registra as 7 ferramentas
 ├── requirements.txt
+├── config/
+│   └── config.yaml           # chave própria (só usada pelo Oráculo)
+├── data/
+│   └── oracle/
+│       └── knowledge.json      # único arquivo de conhecimento do Oráculo
 └── tools/
     ├── network.py            # lógica real de cada ferramenta,
     ├── website.py              # sem nenhuma dependência do MCP —
     ├── device.py                 # são funções Python comuns, testáveis
-    └── domain.py                   # isoladas
+    ├── domain.py                   # isoladas
+    └── oracle.py                     # ingestão + consulta de mangá
 ```
 
 ## Adicionando uma ferramenta nova

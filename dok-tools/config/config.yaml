@@ -1,0 +1,6 @@
+# Config do dok-tools. Usada só pelas ferramentas que precisam de IA
+# diretamente (hoje: o Oráculo, pra interpretar páginas de manga).
+# As outras 4 ferramentas (rede, site, MAC, whois) não precisam disso.
+anthropic:
+  api_key: ""
+  model: "claude-haiku-4-5-20251001"   # visão + resumo — barato o bastante pro volume

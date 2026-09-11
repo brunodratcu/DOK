@@ -17,6 +17,7 @@ from tools.network import check_network
 from tools.website import check_website
 from tools.device import check_device_mac
 from tools.domain import whois_domain
+from tools.oracle import oracle_ingest, oracle_query, oracle_status
 
 mcp = FastMCP("dok-tools")
 
@@ -49,6 +50,31 @@ def whois_domain_tool(domain: str) -> dict:
     """Consulta o registro público WHOIS de um domínio: registrador,
     data de criação, data de expiração, servidores DNS."""
     return whois_domain(domain)
+
+
+@mcp.tool()
+def oracle_ingest_tool(folder_path: str) -> dict:
+    """Processa uma pasta com PDFs de mangá organizados por obra
+    (subpasta) e capítulo (nome do arquivo). Interpreta cada capítulo
+    novo via IA de visão e atualiza o resumo geral de cada obra.
+    Pode demorar — processa vários capítulos, um de cada vez, e salva
+    o progresso a cada um (não perde trabalho se for interrompido)."""
+    return oracle_ingest(folder_path)
+
+
+@mcp.tool()
+def oracle_query_tool(work: str = None) -> dict:
+    """Consulta o conhecimento já processado do Oráculo. Sem 'work',
+    devolve todas as obras. Com 'work' (ex: 'nng', 'tbv', 'ds'),
+    devolve o resumo geral daquela obra e os capítulos já processados."""
+    return oracle_query(work)
+
+
+@mcp.tool()
+def oracle_status_tool() -> dict:
+    """Mostra quantos capítulos de cada obra já foram processados —
+    útil pra saber o que falta ou o que foi adicionado recentemente."""
+    return oracle_status()
 
 
 if __name__ == "__main__":
