@@ -8,7 +8,9 @@ import yaml
 import requests
 from flask import Flask, render_template, jsonify, request
 
-import openrouter_client
+from providers import create_provider
+from providers.openrouter import list_free_models
+from agents.subagents import SubAgentManager
 import chat_store
 import paths
 from agents import agent_loop
@@ -108,21 +110,21 @@ def _usage_response():
         )
         return jsonify({
             "ok": True,
-            "configured": bool(cfg.get("anthropic", {}).get("api_key")),
-            "message": "Monitoramento local do DOK. Não representa o saldo da conta Anthropic.",
+            "configured": bool(cfg.get(cfg.get("provider", "openrouter"), {}).get("api_key")),
+            "message": "Monitoramento local do DOK. Soma o usage devolvido pelo provedor; não representa o saldo da conta.",
             "usage": summary,
             "qr_available": qr_available,
             "qr_url": "/generated/credits_qr.png" if qr_available else None,
-            "billing_url": "https://console.anthropic.com/settings/billing",
+            "billing_url": "https://openrouter.ai/settings/credits",
         })
     except Exception as exc:
         return jsonify({
             "ok": False,
-            "configured": bool(cfg.get("anthropic", {}).get("api_key")),
+            "configured": bool(cfg.get(cfg.get("provider", "openrouter"), {}).get("api_key")),
             "message": f"Não foi possível ler o monitoramento local: {exc}",
             "qr_available": qr_available,
             "qr_url": "/generated/credits_qr.png" if qr_available else None,
-            "billing_url": "https://console.anthropic.com/settings/billing",
+            "billing_url": "https://openrouter.ai/settings/credits",
         }), 500
 
 
@@ -166,11 +168,7 @@ def api_delete_chat(chat_id):
 
 @app.route("/api/chats/<chat_id>/message", methods=["POST"])
 def api_send_message(chat_id):
-    """
-    Toda conversa passa pelo loop de agente com ferramentas (MCP),
-    sempre via Anthropic — tool use não é confiável nos modelos
-    gratuitos da OpenRouter.
-    """
+    """Conversa pelo agent loop configurado; ferramentas entram via MCP."""
     body = request.get_json(force=True, silent=True) or {}
     user_text = (body.get("message") or "").strip()
     if not user_text:
@@ -181,24 +179,39 @@ def api_send_message(chat_id):
         return jsonify({"ok": False, "message": "Conversa não encontrada."}), 404
 
     cfg = load_config()
-    ant = cfg["anthropic"]
+    provider_name = cfg.get("provider", "openrouter")
+    provider_cfg = cfg.get(provider_name, {})
     tools_cfg = cfg.get("tools_server", {})
     tools_server_path = tools_cfg.get("path", "../dok-tools/server.py")
+    if not os.path.isabs(tools_server_path):
+        tools_server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), tools_server_path))
     tools_python_cmd = tools_cfg.get("python")
 
-    history_limit = ant.get("history_limit", 12)
+    history_limit = provider_cfg.get("history_limit", 12)
     history_raw = chat["messages"][-history_limit:]
     history = [{"role": m["role"], "content": m["content"]} for m in history_raw]
+    provider = create_provider(cfg)
+    manager = SubAgentManager(provider, tools_server_path, tools_python_cmd, max_turns=4)
 
-    ok, reply, trace, usage = agent_loop.run(
-        api_key=ant["api_key"],
-        model=ant["model"],
+    def delegate(task, role):
+        sub_ok, sub_reply, sub_trace, _sub_usage = manager.run(
+            task, role, model=provider_cfg.get("model"),
+            system_prompt=cfg["personality"]["system_prompt"],
+            max_tokens=provider_cfg.get("max_tokens", 700),
+        )
+        return sub_reply if sub_ok else f"Sub-agent falhou: {sub_reply}"
+
+    ok, reply, trace, usage = agent_loop.run_agent(
+        provider,
+        model=provider_cfg.get("model"),
         system_prompt=cfg["personality"]["system_prompt"],
         history=history,
         user_text=user_text,
         tools_server_path=tools_server_path,
         tools_python_cmd=tools_python_cmd,
-        max_tokens=ant.get("max_tokens", 800),
+        max_tokens=provider_cfg.get("max_tokens", 800),
+        delegate=delegate,
+        permissions_cfg=cfg,
     )
 
     usage_info = {}
@@ -207,8 +220,8 @@ def api_send_message(chat_id):
         if usage:
             usage_info = usage_store.record_usage(
                 chat_id=chat_id,
-                provider="anthropic",
-                model=ant["model"],
+                provider=provider_name,
+                model=provider_cfg.get("model"),
                 usage=usage,
             )
 
@@ -218,7 +231,7 @@ def api_send_message(chat_id):
 @app.route("/api/openrouter/free-models")
 def api_openrouter_free_models():
     """Lista os modelos gratuitos disponíveis na OpenRouter agora mesmo."""
-    ok, result = openrouter_client.list_free_models()
+    ok, result = list_free_models()
     if not ok:
         return jsonify({"ok": False, "message": result})
     return jsonify({"ok": True, "models": result})

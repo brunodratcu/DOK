@@ -1,61 +1,24 @@
-"""
-mcp_client.py — wrapper síncrono em cima do cliente MCP assíncrono
-(fastmcp), pra ser chamado de dentro de rotas Flask comuns sem
-precisar reescrever o app inteiro como async.
-
-Conecta na pasta dok-tools/ (projeto independente, path configurável
-no config.yaml) via stdio — o DOK inicia o processo do servidor
-sozinho quando precisa, e derruba depois.
-"""
+"""Cliente MCP síncrono. O servidor continua sendo um projeto separado (dok-tools)."""
 import asyncio
 from pathlib import Path
-
 from fastmcp import Client
 from fastmcp.client.transports import PythonStdioTransport
 
-
-def _run(coro):
-    return asyncio.run(coro)
-
-
-def _make_client(server_path: str, python_cmd: str = None):
-    if python_cmd:
-        # Roda o servidor com o Python (e dependências) DELE, não o do DOK —
-        # útil se algum dia voltar a usar venvs separados.
-        transport = PythonStdioTransport(server_path, python_cmd=python_cmd)
-        return Client(transport)
+def _run(coro): return asyncio.run(coro)
+def _make_client(server_path, python_cmd=None):
+    if python_cmd: return Client(PythonStdioTransport(server_path, python_cmd=python_cmd))
     return Client(Path(server_path))
 
-
-def list_tools(server_path: str, python_cmd: str = None):
-    """Retorna as ferramentas disponíveis no servidor, já convertidas
-    pro formato que a API da Anthropic espera em `tools=[...]`."""
+def list_tools(server_path, python_cmd=None):
     async def _list():
-        client = _make_client(server_path, python_cmd)
-        async with client:
+        async with _make_client(server_path, python_cmd) as client:
             tools = await client.list_tools()
-            return [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "input_schema": t.input_schema,
-                }
-                for t in tools
-            ]
+            return [{"name": t.name, "description": t.description or "", "input_schema": t.input_schema} for t in tools]
     return _run(_list())
 
-
-def call_tool(server_path: str, name: str, arguments: dict, python_cmd: str = None):
-    """Chama uma ferramenta específica e devolve o resultado (dict).
-
-    Nota: `.data` do fastmcp vem como None quando a ferramenta devolve
-    um dict vazio ({}) — usa `.structured_content` como respaldo pra
-    não perder esse caso (ex: Oráculo sem nada processado ainda)."""
+def call_tool(server_path, name, arguments, python_cmd=None):
     async def _call():
-        client = _make_client(server_path, python_cmd)
-        async with client:
+        async with _make_client(server_path, python_cmd) as client:
             result = await client.call_tool(name, arguments)
-            if result.data is not None:
-                return result.data
-            return result.structured_content
+            return result.data if result.data is not None else result.structured_content
     return _run(_call())

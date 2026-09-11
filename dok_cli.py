@@ -27,7 +27,7 @@ import paths
 
 CONFIG_PATH = paths.data_path("config", "config.yaml")
 QR_OUTPUT_PATH = paths.data_path("generated", "credits_qr.png")
-BILLING_URL = "https://console.anthropic.com/settings/billing"
+BILLING_URL = "https://openrouter.ai/settings/credits"
 
 
 def load_config():
@@ -116,8 +116,8 @@ def cmd_provider_status():
 
 def cmd_models_list():
     print("Consultando modelos gratuitos na OpenRouter agora mesmo...\n")
-    import openrouter_client
-    ok, result = openrouter_client.list_free_models()
+    from providers.openrouter import list_free_models
+    ok, result = list_free_models()
     if not ok:
         print(f"Erro: {result}")
         return

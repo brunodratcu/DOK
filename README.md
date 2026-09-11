@@ -237,3 +237,16 @@ permissão de execução, copie pra `~/Desktop` e
 
 - Voz (microfone + STT + TTS), quando o hardware for decidido
 - Consulta real de créditos via Usage & Cost Admin API
+
+## Arquitetura Python atualizada
+
+A versão atual separa o DOK em `core`, `providers`, `tools`, `mcp_client` e `agents`.
+Veja `README-ARCHITECTURE.md` para a explicação completa.
+
+**Provider padrão:** OpenRouter. Configure com `./dok key openrouter set`.
+
+**Sub-agents:** o agente principal possui `run_subagent`; o sub-agente não pode criar outro sub-agente, e cada sub-agente tem limite próprio de etapas.
+
+**MCP:** o servidor `dok-tools` continua separado e é descoberto automaticamente pelo cliente MCP.
+
+**Memory:** não existe memória de longo prazo nesta versão, por decisão de arquitetura.
