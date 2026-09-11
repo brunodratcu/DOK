@@ -9,19 +9,16 @@
 </head>
 <body>
     <div class="dok-screen">
-        <!-- Barra superior -->
         <header class="dok-header">
-            <button class="icon-btn" id="menu-toggle" aria-label="Abrir menu">☰</button>
+            <button class="icon-btn sidebar-toggle" id="sidebar-toggle" aria-label="Conversas">☰</button>
             <a class="icon-btn" href="/" aria-label="Voltar">←</a>
-            <div class="dok-tabs">
-                <button class="tab-btn active" data-tab="chats">Chats</button>
-                <button class="tab-btn" data-tab="projetos">Projetos</button>
-            </div>
+            <span class="dok-title">{{ dok_name }}</span>
         </header>
 
         <div class="dok-body">
-            <!-- Sidebar / drawer de conversas -->
-            <aside class="chat-drawer" id="chat-drawer">
+            <!-- Histórico de conversas — sempre visível na esquerda (desktop);
+                 vira painel deslizante em telas pequenas -->
+            <aside class="chat-sidebar" id="chat-sidebar">
                 <button class="new-chat-btn" id="new-chat-btn">+ Nova conversa</button>
                 <div class="chat-list" id="chat-list">
                     <p class="chat-list-empty" id="chat-list-empty" hidden>
@@ -29,18 +26,27 @@
                     </p>
                 </div>
             </aside>
-            <div class="drawer-overlay" id="drawer-overlay"></div>
+            <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-            <!-- Painel Chats -->
-            <main class="tab-panel" id="panel-chats">
+            <!-- Conversa ativa — centralizada, ocupa o resto da tela -->
+            <main class="chat-main">
                 <div class="messages" id="messages">
                     <p class="empty-chat-msg" id="empty-chat-msg">
                         Toque em <strong>+ Nova conversa</strong> ou escreva
-                        abaixo pra começar a falar com o DOK.
+                        abaixo — o DOK pode conversar e também
+                        <strong>checar de verdade</strong> (rede, sites,
+                        dispositivos, domínios), ou processar pastas/arquivos
+                        anexados com o botão +.
                     </p>
                 </div>
 
+                <div class="attach-menu" id="attach-menu" hidden>
+                    <button type="button" class="attach-option" id="attach-folder-btn">📁 Pasta</button>
+                    <button type="button" class="attach-option" id="attach-files-btn">📄 Arquivos</button>
+                </div>
+
                 <form class="composer" id="composer">
+                    <button type="button" class="attach-btn" id="attach-toggle-btn" aria-label="Anexar">+</button>
                     <textarea
                         id="message-input"
                         class="message-input"
@@ -48,27 +54,6 @@
                         rows="1"
                     ></textarea>
                     <button type="submit" class="send-btn" id="send-btn" aria-label="Enviar">➤</button>
-                </form>
-            </main>
-
-            <!-- Painel Projetos -->
-            <main class="tab-panel" id="panel-projetos" hidden>
-                <div class="messages" id="projects-messages">
-                    <p class="empty-chat-msg" id="empty-projects-msg">
-                        Aqui o DOK pode <strong>checar de verdade</strong>:
-                        rede, sites, dispositivos na sua rede, domínios.
-                        Ex: "o site tal está no ar?"
-                    </p>
-                </div>
-
-                <form class="composer" id="projects-composer">
-                    <textarea
-                        id="projects-input"
-                        class="message-input"
-                        placeholder="Peça um diagnóstico pro DOK…"
-                        rows="1"
-                    ></textarea>
-                    <button type="submit" class="send-btn" id="projects-send-btn" aria-label="Enviar">➤</button>
                 </form>
             </main>
         </div>

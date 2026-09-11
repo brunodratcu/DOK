@@ -30,6 +30,22 @@ def _run_flask(host, port):
     app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
+class DokApi:
+    """Exposta ao JS do front-end como `pywebview.api.*` — usa o
+    seletor NATIVO do sistema operacional (não um <input type=file>
+    de navegador), já que o app roda como janela própria."""
+
+    def pick_folder(self):
+        result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+        return result[0] if result else None
+
+    def pick_files(self):
+        result = webview.windows[0].create_file_dialog(
+            webview.OPEN_DIALOG, allow_multiple=True
+        )
+        return list(result) if result else []
+
+
 def main():
     cfg = load_config()
     host = "127.0.0.1"  # janela nativa não precisa expor na rede
@@ -49,6 +65,7 @@ def main():
         height=app_cfg.get("height", 320),
         fullscreen=app_cfg.get("fullscreen", False),
         resizable=app_cfg.get("resizable", True),
+        js_api=DokApi(),
     )
     webview.start()
 

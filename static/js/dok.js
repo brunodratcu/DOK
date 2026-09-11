@@ -1,47 +1,29 @@
+// ============================================================
+// Sidebar de conversas (sempre visível no desktop; deslizante
+// em telas pequenas, via sidebar-toggle)
+// ============================================================
+const sidebarToggle = document.getElementById("sidebar-toggle");
+const chatSidebar = document.getElementById("chat-sidebar");
+const sidebarOverlay = document.getElementById("sidebar-overlay");
 const chatList = document.getElementById("chat-list");
 const chatListEmpty = document.getElementById("chat-list-empty");
-const messagesEl = document.getElementById("messages");
-const emptyChatMsg = document.getElementById("empty-chat-msg");
-const composer = document.getElementById("composer");
-const messageInput = document.getElementById("message-input");
-const sendBtn = document.getElementById("send-btn");
 const newChatBtn = document.getElementById("new-chat-btn");
-const menuToggle = document.getElementById("menu-toggle");
-const chatDrawer = document.getElementById("chat-drawer");
-const drawerOverlay = document.getElementById("drawer-overlay");
-const tabBtns = document.querySelectorAll(".tab-btn");
-const panelChats = document.getElementById("panel-chats");
-const panelProjetos = document.getElementById("panel-projetos");
 
 let currentChatId = null;
 
-// --- Abas Chats / Projetos ---
-tabBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-        tabBtns.forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        const tab = btn.dataset.tab;
-        panelChats.hidden = tab !== "chats";
-        panelProjetos.hidden = tab !== "projetos";
-        if (tab === "projetos") loadProjectsHistory();
-    });
-});
-
-// --- Drawer responsivo (telas pequenas) ---
-function openDrawer() {
-    chatDrawer.classList.add("open");
-    drawerOverlay.classList.add("show");
+function openSidebar() {
+    chatSidebar.classList.add("open");
+    sidebarOverlay.classList.add("show");
 }
-function closeDrawer() {
-    chatDrawer.classList.remove("open");
-    drawerOverlay.classList.remove("show");
+function closeSidebar() {
+    chatSidebar.classList.remove("open");
+    sidebarOverlay.classList.remove("show");
 }
-menuToggle.addEventListener("click", () => {
-    chatDrawer.classList.contains("open") ? closeDrawer() : openDrawer();
+sidebarToggle.addEventListener("click", () => {
+    chatSidebar.classList.contains("open") ? closeSidebar() : openSidebar();
 });
-drawerOverlay.addEventListener("click", closeDrawer);
+sidebarOverlay.addEventListener("click", closeSidebar);
 
-// --- Lista de conversas ---
 async function loadChatList() {
     try {
         const res = await fetch("/api/chats");
@@ -76,16 +58,13 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
-// --- Selecionar / abrir uma conversa ---
 async function selectChat(chatId) {
     currentChatId = chatId;
-    closeDrawer();
-
+    closeSidebar();
     try {
         const res = await fetch(`/api/chats/${chatId}`);
         const data = await res.json();
         if (!data.ok) return;
-
         renderMessages(data.chat.messages);
         loadChatList(); // re-renderiza pra marcar o item ativo
     } catch (err) {
@@ -93,34 +72,6 @@ async function selectChat(chatId) {
     }
 }
 
-function renderMessages(messages) {
-    messagesEl.querySelectorAll(".msg-bubble").forEach((el) => el.remove());
-
-    if (!messages || messages.length === 0) {
-        emptyChatMsg.hidden = false;
-        return;
-    }
-    emptyChatMsg.hidden = true;
-
-    messages.forEach((m) => appendBubble(m.role, m.content));
-    scrollToBottom();
-}
-
-function appendBubble(role, content, pending = false) {
-    emptyChatMsg.hidden = true;
-    const bubble = document.createElement("div");
-    bubble.className = `msg-bubble ${role}` + (pending ? " pending" : "");
-    bubble.textContent = content;
-    messagesEl.appendChild(bubble);
-    scrollToBottom();
-    return bubble;
-}
-
-function scrollToBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
-// --- Nova conversa ---
 newChatBtn.addEventListener("click", async () => {
     try {
         const res = await fetch("/api/chats", { method: "POST" });
@@ -129,6 +80,7 @@ newChatBtn.addEventListener("click", async () => {
             currentChatId = data.id;
             renderMessages([]);
             loadChatList();
+            closeSidebar();
             messageInput.focus();
         }
     } catch (err) {
@@ -136,31 +88,56 @@ newChatBtn.addEventListener("click", async () => {
     }
 });
 
-// --- Auto-resize da caixa de texto ---
+// ============================================================
+// Conversa ativa
+// ============================================================
+const messagesEl = document.getElementById("messages");
+const emptyChatMsg = document.getElementById("empty-chat-msg");
+const composer = document.getElementById("composer");
+const messageInput = document.getElementById("message-input");
+const sendBtn = document.getElementById("send-btn");
+
+function appendBubble(role, content, pending = false) {
+    emptyChatMsg.hidden = true;
+    const bubble = document.createElement("div");
+    bubble.className = `msg-bubble ${role}` + (pending ? " pending" : "");
+    bubble.textContent = content;
+    messagesEl.appendChild(bubble);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return bubble;
+}
+
+function renderMessages(messages) {
+    messagesEl.querySelectorAll(".msg-bubble").forEach((el) => el.remove());
+    if (!messages || messages.length === 0) {
+        emptyChatMsg.hidden = false;
+        return;
+    }
+    emptyChatMsg.hidden = true;
+    messages.forEach((m) => appendBubble(m.role, m.content));
+}
+
 messageInput.addEventListener("input", () => {
     messageInput.style.height = "auto";
     messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + "px";
 });
 
-// --- Enviar mensagem ---
 composer.addEventListener("submit", async (e) => {
     e.preventDefault();
-    await sendCurrentMessage();
+    await sendMessage();
 });
 
-// Enter envia, Shift+Enter quebra linha
 messageInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendCurrentMessage();
+        sendMessage();
     }
 });
 
-async function sendCurrentMessage() {
+async function sendMessage() {
     const text = messageInput.value.trim();
     if (!text) return;
 
-    // Se não tem conversa selecionada, cria uma primeiro
     if (!currentChatId) {
         try {
             const res = await fetch("/api/chats", { method: "POST" });
@@ -173,16 +150,14 @@ async function sendCurrentMessage() {
         }
     }
 
-    // Limpa a caixa de texto IMEDIATAMENTE — antes mesmo da resposta chegar,
-    // pra nunca deixar string presa nela.
+    // limpa a caixa ANTES de esperar resposta — nunca deixa string presa
     messageInput.value = "";
     messageInput.style.height = "auto";
-
     sendBtn.disabled = true;
     messageInput.disabled = true;
 
     appendBubble("user", text);
-    const pendingBubble = appendBubble("assistant", "…", true);
+    const pendingBubble = appendBubble("assistant", "Verificando…", true);
 
     try {
         const res = await fetch(`/api/chats/${currentChatId}/message`, {
@@ -191,7 +166,6 @@ async function sendCurrentMessage() {
             body: JSON.stringify({ message: text }),
         });
         const data = await res.json();
-
         pendingBubble.classList.remove("pending");
         pendingBubble.textContent = data.reply || "Não consegui responder agora.";
     } catch (err) {
@@ -205,95 +179,56 @@ async function sendCurrentMessage() {
     }
 }
 
+// ============================================================
+// Botão + : anexar pasta ou arquivos (seletor nativo do SO)
+// ============================================================
+const attachToggleBtn = document.getElementById("attach-toggle-btn");
+const attachMenu = document.getElementById("attach-menu");
+const attachFolderBtn = document.getElementById("attach-folder-btn");
+const attachFilesBtn = document.getElementById("attach-files-btn");
+
+attachToggleBtn.addEventListener("click", () => {
+    attachMenu.hidden = !attachMenu.hidden;
+});
+
+function hasNativePicker() {
+    return typeof window.pywebview !== "undefined" && window.pywebview.api;
+}
+
+attachFolderBtn.addEventListener("click", async () => {
+    attachMenu.hidden = true;
+    if (!hasNativePicker()) {
+        alert("Selecionar pasta só funciona no app instalado (não no modo navegador de desenvolvimento).");
+        return;
+    }
+    try {
+        const path = await window.pywebview.api.pick_folder();
+        if (path) insertAttachedPath(path);
+    } catch (err) {
+        console.error("Falha ao escolher pasta", err);
+    }
+});
+
+attachFilesBtn.addEventListener("click", async () => {
+    attachMenu.hidden = true;
+    if (!hasNativePicker()) {
+        alert("Selecionar arquivos só funciona no app instalado (não no modo navegador de desenvolvimento).");
+        return;
+    }
+    try {
+        const paths = await window.pywebview.api.pick_files();
+        if (paths && paths.length) insertAttachedPath(paths.join(", "));
+    } catch (err) {
+        console.error("Falha ao escolher arquivos", err);
+    }
+});
+
+function insertAttachedPath(path) {
+    const current = messageInput.value.trim();
+    messageInput.value = current ? `${current}\n${path}` : path;
+    messageInput.dispatchEvent(new Event("input"));
+    messageInput.focus();
+}
+
 // --- Inicialização ---
 loadChatList();
-
-// ============================================================
-// Aba Projetos — diagnóstico com ferramentas reais (MCP)
-// ============================================================
-const projectsMessages = document.getElementById("projects-messages");
-const emptyProjectsMsg = document.getElementById("empty-projects-msg");
-const projectsComposer = document.getElementById("projects-composer");
-const projectsInput = document.getElementById("projects-input");
-const projectsSendBtn = document.getElementById("projects-send-btn");
-
-function appendProjectBubble(role, content, pending = false) {
-    emptyProjectsMsg.hidden = true;
-    const bubble = document.createElement("div");
-    bubble.className = `msg-bubble ${role}` + (pending ? " pending" : "");
-    bubble.textContent = content;
-    projectsMessages.appendChild(bubble);
-    projectsMessages.scrollTop = projectsMessages.scrollHeight;
-    return bubble;
-}
-
-async function loadProjectsHistory() {
-    try {
-        const res = await fetch("/api/projects/history");
-        const messages = await res.json();
-
-        projectsMessages.querySelectorAll(".msg-bubble").forEach((el) => el.remove());
-
-        if (!messages || messages.length === 0) {
-            emptyProjectsMsg.hidden = false;
-            return;
-        }
-        emptyProjectsMsg.hidden = true;
-        messages.forEach((m) => appendProjectBubble(m.role, m.content));
-    } catch (err) {
-        console.error("Falha ao carregar histórico de projetos", err);
-    }
-}
-
-projectsInput.addEventListener("input", () => {
-    projectsInput.style.height = "auto";
-    projectsInput.style.height = Math.min(projectsInput.scrollHeight, 160) + "px";
-});
-
-projectsComposer.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    await sendProjectMessage();
-});
-
-projectsInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendProjectMessage();
-    }
-});
-
-async function sendProjectMessage() {
-    const text = projectsInput.value.trim();
-    if (!text) return;
-
-    // limpa a caixa ANTES de esperar resposta — mesma regra da aba Chats
-    projectsInput.value = "";
-    projectsInput.style.height = "auto";
-
-    projectsSendBtn.disabled = true;
-    projectsInput.disabled = true;
-
-    appendProjectBubble("user", text);
-    const pendingBubble = appendProjectBubble(
-        "assistant", "Verificando… (pode levar alguns segundos)", true
-    );
-
-    try {
-        const res = await fetch("/api/projects/message", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: text }),
-        });
-        const data = await res.json();
-
-        pendingBubble.classList.remove("pending");
-        pendingBubble.textContent = data.reply || "Não consegui responder agora.";
-    } catch (err) {
-        pendingBubble.classList.remove("pending");
-        pendingBubble.textContent = "Falha de conexão. Tenta de novo.";
-    } finally {
-        projectsSendBtn.disabled = false;
-        projectsInput.disabled = false;
-        projectsInput.focus();
-    }
-}

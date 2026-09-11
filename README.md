@@ -22,7 +22,7 @@ dok/
 │   └── client.py                # chamada direta à API de Mensagens da Anthropic
 ├── openrouter_client/
 │   └── client.py                # chamada à API da OpenRouter (alternativa gratuita)
-├── projects_store.py                 # histórico da aba Projetos
+├── chat_store.py                      # múltiplas conversas (JSON único)
 ├── chat_store.py              # persistência das conversas (JSON)
 ├── paths.py                   # resolve caminhos (funciona empacotado ou não)
 ├── dok_app.py                  # ponto de entrada do app (janela nativa)
@@ -35,10 +35,10 @@ dok/
 ├── config/
 │   └── config.yaml         # personalidade, chaves, modelo, clima
 ├── data/
-│   └── chats.json            # conversas salvas (criado automaticamente)
+│   └── chat.json             # histórico da conversa (criado automaticamente)
 ├── templates/
 │   ├── index.html            # tela de boas-vindas (clima/hora)
-│   └── dok.html                # tela DOK (chats)
+│   └── dok.html                # tela do DOK (sidebar de conversas + chat)
 └── static/
     ├── css/style.css           # tela de boas-vindas
     ├── css/dok.css               # tela de chat
@@ -121,25 +121,21 @@ recompilar o executável a cada alteração). É o jeito mais rápido de
 iterar durante o desenvolvimento; o `dok_app.py`/executável é o
 produto final que o usuário realmente abre.
 
-## Aba DOK (chat)
+## DOK — múltiplas conversas, com ferramentas reais (MCP)
 
-Toque no ícone ◆ na tela principal. A aba **Chats** já funciona de
-ponta a ponta: nova conversa, histórico salvo, resposta do Claude real
-via sua chave. A aba **Projetos** é só um placeholder por enquanto.
+Toque no ícone ◆ na tela principal. **Barra de conversas fixa à
+esquerda** (sempre visível no notebook; vira painel deslizante,
+ativado pelo ☰, em telas pequenas como a do Pi) — cada conversa tem
+seu próprio histórico. A conversa ativa fica **centralizada**,
+ocupando o restante da tela.
 
-**Detalhes de comportamento pra reduzir custo:**
-- `history_limit` no `config.yaml` controla quantas mensagens recentes
-  são reenviadas como contexto a cada pergunta (padrão: 12) — evita
-  que conversas longas fiquem caras
-- `max_tokens` limita o tamanho da resposta (padrão: 400)
-- O modelo padrão é o **Haiku** (mais barato), configurável em
-  `anthropic.model`
-
-## Aba Projetos — diagnóstico com ferramentas reais (MCP)
-
-Diferente da aba Chats (conversa pura), a aba Projetos usa um **agente
-com ferramentas de verdade** — o DOK pode checar rede, sites,
-dispositivos e domínios de fato, não só descrever de memória.
+Qualquer conversa pode **checar de verdade** (rede, sites,
+dispositivos na sua rede, domínios), além de conversar normalmente. O
+botão **+**, ao lado da caixa de texto, deixa anexar uma **pasta** ou
+**arquivos** do seu computador (usando o seletor nativo do sistema —
+só funciona no app empacotado, não no modo navegador de
+desenvolvimento) — o caminho escolhido cai na caixa de texto, você
+completa com uma instrução e manda.
 
 Isso depende de um segundo projeto, independente deste:
 **`dok-tools/`**, que precisa estar na mesma pasta pai:
@@ -163,8 +159,19 @@ ambientes separados.
 
 **Por que só Anthropic:** ferramentas exigem um modelo consistente
 pra decidir quando usá-las — modelos gratuitos da OpenRouter tendem a
-ser inconfiáveis nisso. A aba Projetos sempre usa a Anthropic,
-independente do que estiver configurado em `provider` pra aba Chats.
+ser inconfiáveis nisso. Por causa disso, toda conversa sempre usa a
+Anthropic; a OpenRouter fica reservada pra uso futuro (o endpoint de
+listar modelos gratuitos continua disponível em
+`/api/openrouter/free-models`).
+
+**Detalhes de comportamento pra reduzir custo:**
+- `history_limit` no `config.yaml` (seção `anthropic`) controla quantas
+  mensagens recentes são reenviadas como contexto a cada pergunta
+  (padrão: 12)
+- `max_tokens` limita o tamanho da resposta (padrão: 800, mais alto
+  que antes porque respostas com ferramentas tendem a ser mais longas)
+- O modelo padrão é o **Haiku** (mais barato), configurável em
+  `anthropic.model`
 
 Detalhes de arquitetura, como testar o `dok-tools` sozinho, e como
 adicionar uma ferramenta nova: veja `dok-tools/README.md`.
@@ -228,7 +235,5 @@ permissão de execução, copie pra `~/Desktop` e
 
 ## Próximos passos
 
-- Voz (microfone + STT + TTS) na aba Chats, quando o hardware for
-  decidido
-- Aba Projetos
+- Voz (microfone + STT + TTS), quando o hardware for decidido
 - Consulta real de créditos via Usage & Cost Admin API

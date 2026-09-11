@@ -1,3 +1,10 @@
+/* Correção de bug real: sem esta regra, elementos com [hidden]
+   continuavam visíveis quando outra classe (ex: display:flex) tinha
+   prioridade sobre o atributo. */
+[hidden] {
+    display: none !important;
+}
+
 .dok-screen {
     height: 100vh;
     width: 100vw;
@@ -34,40 +41,32 @@
     flex-shrink: 0;
 }
 
-.dok-tabs {
-    display: flex;
-    gap: 8px;
-    margin-left: auto;
+/* Botão de abrir a sidebar — só existe visualmente em telas pequenas
+   (no desktop a sidebar já fica sempre visível, o botão é inútil) */
+.sidebar-toggle {
+    display: none;
 }
 
-.tab-btn {
-    background: transparent;
-    border: 1px solid #26262c;
-    color: #8a8a8a;
-    padding: 8px 18px;
-    border-radius: 999px;
-    font-size: 0.9rem;
-    cursor: pointer;
+.dok-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #ff6b1a;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
-.tab-btn.active {
-    background: #ff6b1a;
-    color: #0a0a0c;
-    border-color: #ff6b1a;
-    font-weight: 600;
-}
-
-/* --- Corpo: sidebar + painel --- */
+/* --- Corpo: sidebar + conversa --- */
 
 .dok-body {
     flex: 1;
     display: flex;
-    min-height: 0; /* essencial pra scroll interno funcionar */
+    min-height: 0;
     position: relative;
 }
 
-.chat-drawer {
-    width: 260px;
+.chat-sidebar {
+    width: 280px;
+    flex-shrink: 0;
     background: #101013;
     border-right: 1px solid #1c1c20;
     padding: 2vh 1vw;
@@ -75,7 +74,6 @@
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
-    flex-shrink: 0;
 }
 
 .new-chat-btn {
@@ -132,13 +130,13 @@
     margin-top: 4vh;
 }
 
-.drawer-overlay {
+.sidebar-overlay {
     display: none;
 }
 
-/* --- Painel de conversa --- */
+/* --- Conversa ativa: centralizada, ocupa o resto da tela --- */
 
-.tab-panel {
+.chat-main {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -152,6 +150,9 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+    width: 100%;
+    max-width: 760px;
+    margin: 0 auto;
 }
 
 .empty-chat-msg {
@@ -159,11 +160,11 @@
     font-size: 0.95rem;
     text-align: center;
     margin: auto;
-    max-width: 40ch;
+    max-width: 42ch;
 }
 
 .msg-bubble {
-    max-width: 78%;
+    max-width: 82%;
     padding: 12px 16px;
     border-radius: 18px;
     font-size: 0.95rem;
@@ -190,7 +191,7 @@
     opacity: 0.6;
 }
 
-/* --- Composer (caixa de texto) --- */
+/* --- Composer --- */
 
 .composer {
     display: flex;
@@ -199,6 +200,10 @@
     padding: 2vh 4vw;
     border-top: 1px solid #1c1c20;
     flex-shrink: 0;
+    width: 100%;
+    max-width: 760px;
+    margin: 0 auto;
+    box-sizing: border-box;
 }
 
 .message-input {
@@ -237,10 +242,58 @@
     cursor: default;
 }
 
-/* --- Responsivo: telas pequenas (touch do Pi) viram drawer sobreposto --- */
+/* --- Botão de anexar (+) e menu Pasta/Arquivos --- */
 
-@media (max-width: 700px) {
-    .chat-drawer {
+.attach-btn {
+    background: #16161a;
+    border: 1px solid #26262c;
+    color: #ff6b1a;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    font-size: 1.4rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.attach-btn:active {
+    border-color: #ff6b1a;
+}
+
+.attach-menu {
+    display: flex;
+    gap: 10px;
+    padding: 0 4vw 1.5vh;
+    width: 100%;
+    max-width: 760px;
+    margin: 0 auto;
+    box-sizing: border-box;
+}
+
+.attach-option {
+    background: #16161a;
+    border: 1px solid #26262c;
+    color: #f2f2f0;
+    padding: 10px 16px;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.attach-option:active {
+    border-color: #ff6b1a;
+}
+
+/* --- Responsivo: telas pequenas (touch do Pi) — sidebar vira painel
+   deslizante, ativado pelo botão hambúrguer --- */
+
+@media (max-width: 800px) {
+    .sidebar-toggle {
+        display: flex;
+    }
+
+    .chat-sidebar {
         position: fixed;
         top: 0;
         left: 0;
@@ -253,11 +306,11 @@
         box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
     }
 
-    .chat-drawer.open {
+    .chat-sidebar.open {
         transform: translateX(0);
     }
 
-    .drawer-overlay.show {
+    .sidebar-overlay.show {
         display: block;
         position: fixed;
         inset: 0;

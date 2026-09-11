@@ -1,12 +1,13 @@
 """
-agent_loop.py — orquestra o ciclo decisão-ação-observação descrito
-antes: pergunta do usuário -> Claude decide se quer uma ferramenta ->
-se quiser, o DOK executa de verdade via MCP -> resultado volta pro
-Claude -> repete até ele responder com texto final em vez de pedir
-outra ferramenta.
+agent_loop.py — orquestra o ciclo decisão-ação-observação: pergunta
+do usuário -> Claude decide se quer uma ferramenta -> se quiser, o
+DOK executa de verdade via MCP -> resultado volta pro Claude ->
+repete até ele responder com texto final em vez de pedir outra
+ferramenta.
 
-Usado só pela aba Projetos — a aba Chats continua simples e barata,
-sem ferramentas.
+É o caminho único do chat do DOK agora — ferramentas sempre
+disponíveis, sempre via Anthropic (tool use não é confiável nos
+modelos gratuitos da OpenRouter).
 """
 import mcp_client
 from . import claude_agent
@@ -26,13 +27,23 @@ def _mcp_tools_to_anthropic_format(mcp_tools):
     ]
 
 
+def _sum_usage(accumulated, new):
+    for key in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+        accumulated[key] = accumulated.get(key, 0) + (new.get(key) or 0)
+    # cache_creation é um sub-dict às vezes — soma os dois formatos possíveis
+    new_creation = new.get("cache_creation") or {}
+    if new_creation:
+        acc_creation = accumulated.setdefault("cache_creation", {})
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"):
+            acc_creation[key] = acc_creation.get(key, 0) + (new_creation.get(key) or 0)
+    return accumulated
+
+
 def run(api_key, model, system_prompt, history, user_text, tools_server_path, max_tokens=800, tools_python_cmd=None):
     """
-    history: lista de {"role": ..., "content": ...} já no formato da API
-             (mensagens anteriores da sessão de Projetos)
-    Retorna (ok: bool, resposta_final: str, trace: list) — trace é uma
-    lista legível do que aconteceu (útil pra mostrar na UI o que foi
-    verificado, não só a resposta final).
+    Retorna (ok: bool, resposta_final: str, trace: list, usage: dict).
+    `usage` é a soma de todas as chamadas feitas nesta rodada (pode ser
+    mais de uma, se o Claude pedir ferramentas antes de responder).
     """
     try:
         mcp_tools = mcp_client.list_tools(tools_server_path, python_cmd=tools_python_cmd)
@@ -45,6 +56,7 @@ def run(api_key, model, system_prompt, history, user_text, tools_server_path, ma
     anthropic_tools = _mcp_tools_to_anthropic_format(mcp_tools)
     messages = list(history) + [{"role": "user", "content": user_text}]
     trace = []
+    total_usage = {}
     if tools_unavailable_note:
         trace.append(tools_unavailable_note)
 
@@ -58,22 +70,22 @@ def run(api_key, model, system_prompt, history, user_text, tools_server_path, ma
             max_tokens=max_tokens,
         )
         if not ok:
-            return False, response, trace
+            return False, response, trace, total_usage
+
+        if isinstance(response, dict) and response.get("usage"):
+            _sum_usage(total_usage, response["usage"])
 
         content_blocks = response.get("content", [])
         stop_reason = response.get("stop_reason")
 
-        # Guarda a resposta do assistente (pode ter texto + tool_use juntos)
         messages.append({"role": "assistant", "content": content_blocks})
 
         if stop_reason != "tool_use":
-            # Terminou de decidir — junta os blocos de texto como resposta final
             final_text = "\n".join(
                 b.get("text", "") for b in content_blocks if b.get("type") == "text"
             ).strip()
-            return True, final_text or "(sem resposta de texto)", trace
+            return True, final_text or "(sem resposta de texto)", trace, total_usage
 
-        # Tem pelo menos um pedido de ferramenta — executa cada um de verdade
         tool_results = []
         for block in content_blocks:
             if block.get("type") != "tool_use":
@@ -98,4 +110,4 @@ def run(api_key, model, system_prompt, history, user_text, tools_server_path, ma
 
         messages.append({"role": "user", "content": tool_results})
 
-    return False, "O DOK tentou várias etapas e não chegou a uma resposta final. Tenta reformular a pergunta.", trace
+    return False, "O DOK tentou várias etapas e não chegou a uma resposta final. Tenta reformular a pergunta.", trace, total_usage

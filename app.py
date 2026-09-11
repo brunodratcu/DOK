@@ -8,10 +8,8 @@ import yaml
 import requests
 from flask import Flask, render_template, jsonify, request
 
-import claude_client
 import openrouter_client
 import chat_store
-import projects_store
 import paths
 from agents import agent_loop
 import usage_store
@@ -139,11 +137,17 @@ def api_credits():
     return _usage_response()
 
 
-# --- Chats (DOK) ---
+# --- Conversas do DOK — múltiplas, sempre com ferramentas reais (MCP) ---
 
 @app.route("/api/chats")
 def api_list_chats():
     return jsonify(chat_store.list_chats())
+
+
+@app.route("/api/chats", methods=["POST"])
+def api_create_chat():
+    chat_id = chat_store.create_chat()
+    return jsonify({"ok": True, "id": chat_id})
 
 
 @app.route("/api/chats/<chat_id>")
@@ -154,12 +158,6 @@ def api_get_chat(chat_id):
     return jsonify({"ok": True, "chat": chat})
 
 
-@app.route("/api/chats", methods=["POST"])
-def api_create_chat():
-    chat_id = chat_store.create_chat()
-    return jsonify({"ok": True, "id": chat_id})
-
-
 @app.route("/api/chats/<chat_id>", methods=["DELETE"])
 def api_delete_chat(chat_id):
     ok = chat_store.delete_chat(chat_id)
@@ -168,9 +166,13 @@ def api_delete_chat(chat_id):
 
 @app.route("/api/chats/<chat_id>/message", methods=["POST"])
 def api_send_message(chat_id):
+    """
+    Toda conversa passa pelo loop de agente com ferramentas (MCP),
+    sempre via Anthropic — tool use não é confiável nos modelos
+    gratuitos da OpenRouter.
+    """
     body = request.get_json(force=True, silent=True) or {}
     user_text = (body.get("message") or "").strip()
-
     if not user_text:
         return jsonify({"ok": False, "message": "Mensagem vazia."}), 400
 
@@ -179,92 +181,16 @@ def api_send_message(chat_id):
         return jsonify({"ok": False, "message": "Conversa não encontrada."}), 404
 
     cfg = load_config()
-    provider = cfg.get("provider", "anthropic")
-
-    # monta o histórico recente (limitado, pra controlar custo)
-    provider_cfg = cfg[provider]
-    history_limit = provider_cfg.get("history_limit", 12)
-    recent = chat["messages"][-history_limit:]
-    api_messages = [{"role": m["role"], "content": m["content"]} for m in recent]
-    api_messages.append({"role": "user", "content": user_text})
-
-    chat_store.add_message(chat_id, "user", user_text)
-
-    usage = {}
-    if provider == "openrouter":
-        ok, reply = openrouter_client.send_message(
-            api_key=provider_cfg["api_key"],
-            model=provider_cfg["model"],
-            system_prompt=cfg["personality"]["system_prompt"],
-            messages=api_messages,
-            max_tokens=provider_cfg.get("max_tokens", 400),
-        )
-    else:
-        ok, reply, usage = claude_client.send_message(
-            api_key=provider_cfg["api_key"],
-            model=provider_cfg["model"],
-            system_prompt=cfg["personality"]["system_prompt"],
-            messages=api_messages,
-            max_tokens=provider_cfg.get("max_tokens", 400),
-        )
-
-    usage_info = {}
-    if ok:
-        chat_store.add_message(chat_id, "assistant", reply)
-        if provider == "anthropic" and usage:
-            usage_info = usage_store.record_usage(
-                chat_id=chat_id,
-                provider=provider,
-                model=provider_cfg["model"],
-                usage=usage,
-            )
-
-    return jsonify({"ok": ok, "reply": reply, "provider": provider, "usage": usage_info})
-
-
-@app.route("/api/openrouter/free-models")
-def api_openrouter_free_models():
-    """Lista os modelos gratuitos disponíveis na OpenRouter agora mesmo."""
-    ok, result = openrouter_client.list_free_models()
-    if not ok:
-        return jsonify({"ok": False, "message": result})
-    return jsonify({"ok": True, "models": result})
-
-
-@app.route("/api/projects/history")
-def api_projects_history():
-    return jsonify(projects_store.get_history())
-
-
-@app.route("/api/projects/clear", methods=["POST"])
-def api_projects_clear():
-    projects_store.clear_history()
-    return jsonify({"ok": True})
-
-
-@app.route("/api/projects/message", methods=["POST"])
-def api_projects_message():
-    """
-    Aba Projetos: usa o loop de agente com ferramentas (MCP), sempre
-    via Anthropic — modelos gratuitos da OpenRouter são inconsistentes
-    demais com tool use pra confiar numa tarefa de diagnóstico real.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    user_text = (body.get("message") or "").strip()
-    if not user_text:
-        return jsonify({"ok": False, "message": "Mensagem vazia."}), 400
-
-    cfg = load_config()
     ant = cfg["anthropic"]
     tools_cfg = cfg.get("tools_server", {})
     tools_server_path = tools_cfg.get("path", "../dok-tools/server.py")
     tools_python_cmd = tools_cfg.get("python")
 
-    # histórico curto — tarefas de diagnóstico não precisam de contexto longo
-    history_raw = projects_store.get_history()[-6:]
+    history_limit = ant.get("history_limit", 12)
+    history_raw = chat["messages"][-history_limit:]
     history = [{"role": m["role"], "content": m["content"]} for m in history_raw]
 
-    ok, reply, trace = agent_loop.run(
+    ok, reply, trace, usage = agent_loop.run(
         api_key=ant["api_key"],
         model=ant["model"],
         system_prompt=cfg["personality"]["system_prompt"],
@@ -275,10 +201,27 @@ def api_projects_message():
         max_tokens=ant.get("max_tokens", 800),
     )
 
+    usage_info = {}
     if ok:
-        projects_store.add_exchange(user_text, reply)
+        chat_store.add_exchange(chat_id, user_text, reply)
+        if usage:
+            usage_info = usage_store.record_usage(
+                chat_id=chat_id,
+                provider="anthropic",
+                model=ant["model"],
+                usage=usage,
+            )
 
-    return jsonify({"ok": ok, "reply": reply, "trace": trace})
+    return jsonify({"ok": ok, "reply": reply, "trace": trace, "usage": usage_info})
+
+
+@app.route("/api/openrouter/free-models")
+def api_openrouter_free_models():
+    """Lista os modelos gratuitos disponíveis na OpenRouter agora mesmo."""
+    ok, result = openrouter_client.list_free_models()
+    if not ok:
+        return jsonify({"ok": False, "message": result})
+    return jsonify({"ok": True, "models": result})
 
 
 if __name__ == "__main__":
