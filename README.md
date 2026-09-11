@@ -13,12 +13,16 @@ de microfone/alto-falante.
 ```
 dok/
 ├── app.py                  # servidor Flask
-├── agent_loop.py               # loop de decisão-ação pra aba Projetos
-├── claude_agent.py               # chamada à Anthropic com tool use
-├── mcp_client.py                   # conecta no servidor dok-tools
+├── agents/
+│   ├── agent_loop.py           # loop de decisão-ação pra aba Projetos
+│   └── claude_agent.py           # chamada à Anthropic com tool use
+├── mcp_client/
+│   └── client.py                # conecta no servidor dok-tools
+├── claude_client/
+│   └── client.py                # chamada direta à API de Mensagens da Anthropic
+├── openrouter_client/
+│   └── client.py                # chamada à API da OpenRouter (alternativa gratuita)
 ├── projects_store.py                 # histórico da aba Projetos
-├── claude_client.py          # chamada direta à API de Mensagens da Anthropic
-├── openrouter_client.py       # chamada à API da OpenRouter (alternativa gratuita)
 ├── chat_store.py              # persistência das conversas (JSON)
 ├── paths.py                   # resolve caminhos (funciona empacotado ou não)
 ├── dok_app.py                  # ponto de entrada do app (janela nativa)

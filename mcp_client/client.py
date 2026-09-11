@@ -46,10 +46,16 @@ def list_tools(server_path: str, python_cmd: str = None):
 
 
 def call_tool(server_path: str, name: str, arguments: dict, python_cmd: str = None):
-    """Chama uma ferramenta específica e devolve o resultado (dict)."""
+    """Chama uma ferramenta específica e devolve o resultado (dict).
+
+    Nota: `.data` do fastmcp vem como None quando a ferramenta devolve
+    um dict vazio ({}) — usa `.structured_content` como respaldo pra
+    não perder esse caso (ex: Oráculo sem nada processado ainda)."""
     async def _call():
         client = _make_client(server_path, python_cmd)
         async with client:
             result = await client.call_tool(name, arguments)
-            return result.data
+            if result.data is not None:
+                return result.data
+            return result.structured_content
     return _run(_call())

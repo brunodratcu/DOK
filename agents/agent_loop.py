@@ -9,7 +9,7 @@ Usado só pela aba Projetos — a aba Chats continua simples e barata,
 sem ferramentas.
 """
 import mcp_client
-import claude_agent
+from . import claude_agent
 
 MAX_TURNS = 6  # trava de segurança contra loop infinito
 

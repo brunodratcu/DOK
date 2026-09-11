@@ -13,7 +13,7 @@ import openrouter_client
 import chat_store
 import projects_store
 import paths
-import agent_loop
+from agents import agent_loop
 import usage_store
 
 CONFIG_PATH = paths.data_path("config", "config.yaml")
