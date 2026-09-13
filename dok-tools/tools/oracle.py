@@ -1,229 +1,315 @@
-"""
-oracle.py — o Oráculo: lê pastas de PDF de manga, interpreta via IA de
-visão, e mantém UM ÚNICO arquivo de conhecimento consolidado (não um
-arquivo por capítulo). Processamento pesado sempre na nuvem (API) —
-localmente só converte PDF em imagem, nada de modelo rodando aqui.
+"""Memória narrativa do DOK baseada em três Markdown por obra.
 
-Funciona como um mini-agente: para cada capítulo novo, primeiro
-interpreta as páginas (visão), depois funde esse resumo no resumo
-geral da obra (um segundo passo, mais barato, só texto) — é assim que
-"resume a obra inteira" se mantém atualizado sem reprocessar tudo.
+Etapas:
+1. pages.md    -> leitura detalhada das páginas, em ordem.
+2. chapter.md  -> registro consolidado de cada capítulo.
+3. work.md     -> memória cumulativa da obra.
+
+Não há banco de dados nem JSON de conhecimento. Os Markdown são a fonte
+persistente e legível da memória. A obra só é definida depois que o capítulo
+foi completamente interpretado, usando o nome do arquivo como identificador.
 """
+from __future__ import annotations
+
 import base64
-import io
-import json
 import os
 import re
-import time
+from pathlib import Path
 
+import pymupdf
 import requests
 import yaml
-import pymupdf  # PyMuPDF — só conversão PDF->imagem, sem processamento pesado local
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "config.yaml")
-KNOWLEDGE_PATH = os.path.join(BASE_DIR, "..", "data", "oracle", "knowledge.json")
-
-API_URL = "https://api.anthropic.com/v1/messages"
-API_VERSION = "2023-06-01"
-
-CHAPTER_NUM_RE = re.compile(r"(\d+)")
+BASE_DIR = Path(__file__).resolve().parent.parent
+CONFIG_PATH = BASE_DIR / "config" / "config.yaml"
+DEFAULT_MEMORY_ROOT = BASE_DIR / "data" / "oracle"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+CHAPTER_NUM_RE = re.compile(r"(?i)(?:chapter|cap(?:itulo)?|cap)?[^0-9]{0,8}(\d+)")
 
 
-# --- Config e armazenamento (arquivo único) ---
-
-def _load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def _load_config() -> dict:
+    with CONFIG_PATH.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
-def _load_knowledge():
-    if not os.path.exists(KNOWLEDGE_PATH):
-        return {}
-    with open(KNOWLEDGE_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+def _provider_config(cfg):
+    provider = cfg.get("provider", "openrouter")
+    section = cfg.get(provider, {}) or {}
+    api_key = section.get("api_key") or os.getenv("OPENROUTER_API_KEY" if provider == "openrouter" else "ANTHROPIC_API_KEY", "")
+    return provider, api_key, section.get("model", "")
 
 
-def _save_knowledge(data):
-    os.makedirs(os.path.dirname(KNOWLEDGE_PATH), exist_ok=True)
-    with open(KNOWLEDGE_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def _memory_root() -> Path:
+    cfg = _load_config().get("oracle", {})
+    raw = cfg.get("memory_path")
+    if raw:
+        path = Path(os.path.expandvars(os.path.expanduser(str(raw))))
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        return path.resolve()
+    return DEFAULT_MEMORY_ROOT
 
 
-# --- Descoberta de arquivos ---
+def _safe_name(name: str) -> str:
+    name = re.sub(r"[^\w\- .]+", "", name, flags=re.UNICODE).strip(" .")
+    name = re.sub(r"\s+", " ", name)
+    return name or "obra-nao-classificada"
 
-def discover_pdfs(folder_path: str):
+
+def _infer_work_name(filename: str) -> str:
+    """Extrai o nome da obra do nome do documento, sem mapa de obras.
+
+    Exemplos:
+      Two Blue Vortex Chapter 001.pdf -> Two Blue Vortex
+      naruto_next_generation_12.pdf    -> naruto next generation
+      Chapter_001.pdf                  -> obra-nao-classificada
     """
-    Convenção assumida: pasta_raiz/NOME_DA_OBRA/algo_com_numero.pdf
-    (ex: mangas/nng/capitulo_012.pdf, mangas/tbv/cap_07.pdf).
-    O nome da obra é a subpasta de primeiro nível; o número do
-    capítulo é extraído do nome do arquivo (ou da pasta, se o PDF
-    estiver direto dentro da pasta da obra sem subpastas por capítulo).
-    """
-    found = []
-    folder_path = os.path.abspath(folder_path)
-    for work_name in sorted(os.listdir(folder_path)):
-        work_dir = os.path.join(folder_path, work_name)
-        if not os.path.isdir(work_dir):
-            continue
-        for root, _, files in os.walk(work_dir):
-            for fname in sorted(files):
-                if not fname.lower().endswith(".pdf"):
-                    continue
-                match = CHAPTER_NUM_RE.search(fname) or CHAPTER_NUM_RE.search(os.path.basename(root))
-                chapter_num = int(match.group(1)) if match else None
-                found.append({
-                    "work": work_name.lower(),
-                    "chapter": chapter_num,
-                    "path": os.path.join(root, fname),
-                    "filename": fname,
-                })
-    return found
+    stem = Path(filename).stem
+    stem = re.sub(r"(?i)[._\- ]*(?:chapter|cap(?:itulo)?)[._\- ]*\d+.*$", "", stem)
+    stem = re.sub(r"(?i)[._\- ]+\d{1,4}$", "", stem)
+    stem = re.sub(r"[_\-.]+", " ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip(" -._")
+    if not stem or stem.lower() in {"chapter", "cap", "capitulo", "manga"}:
+        return "obra-nao-classificada"
+    return stem
 
 
-# --- Conversão PDF -> imagens (leve, local) ---
+def _chapter_number(filename: str) -> int | None:
+    matches = list(re.finditer(r"\d+", Path(filename).stem))
+    if not matches:
+        return None
+    # O último número é normalmente o número do capítulo.
+    return int(matches[-1].group())
 
-def _pdf_to_b64_images(pdf_path: str, max_pages: int = 40, zoom: float = 1.5):
+
+def _work_dir(work: str) -> Path:
+    return _memory_root() / _safe_name(work)
+
+
+def _paths(work: str):
+    root = _work_dir(work)
+    return root / "pages.md", root / "chapters.md", root / "work.md"
+
+
+def _append(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(text.rstrip() + "\n\n")
+
+
+def _read(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _pdf_page_images(pdf_path: str, start: int, end: int, zoom: float = 1.35):
     images = []
     doc = pymupdf.open(pdf_path)
     try:
-        for page_index in range(min(len(doc), max_pages)):
-            page = doc.load_page(page_index)
-            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-            img_bytes = pix.tobytes("jpeg")
-            images.append(base64.b64encode(img_bytes).decode("ascii"))
+        end = min(end, len(doc))
+        for index in range(start, end):
+            page = doc.load_page(index)
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+            images.append((index + 1, base64.b64encode(pix.tobytes("jpeg")).decode("ascii")))
     finally:
         doc.close()
     return images
 
 
-# --- Chamadas à Anthropic ---
-
-def _call_anthropic(api_key, model, system_prompt, content_blocks, max_tokens=1500):
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": API_VERSION,
-        "content-type": "application/json",
-    }
+def _call_openrouter(api_key, model, system_prompt, content, max_tokens=1800):
+    if not api_key:
+        raise ValueError("Chave da OpenRouter não configurada.")
     payload = {
         "model": model,
         "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": content_blocks}],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ],
     }
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
-    text = "\n".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-    return text.strip()
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/brunodratcu/dok",
+        "X-Title": "DOK",
+    }
+    r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
+    data = r.json()
+    if r.status_code != 200:
+        raise RuntimeError(data.get("error", {}).get("message", r.text))
+    return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "").strip()
 
 
-def _interpret_chapter(images_b64, work, chapter_num, api_key, model):
-    """Uma chamada de visão por capítulo (todas as páginas juntas numa
-    mensagem só — mais barato que uma chamada por página)."""
-    content = [{"type": "text", "text": (
-        f"Estas são as páginas do capítulo {chapter_num} da obra '{work}', em ordem. "
-        "Analise SOMENTE o que está desenhado/escrito nas imagens — não invente nada "
-        "que não esteja visível. Responda em JSON puro, sem markdown, no formato: "
-        '{"summary": "resumo detalhado do que acontece neste capítulo", '
-        '"characters": ["nome1", "nome2"], "key_events": ["evento1", "evento2"], '
-        '"notable_quotes": ["fala marcante 1"]}'
-    )}]
-    for img_b64 in images_b64:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64},
-        })
-
-    raw = _call_anthropic(
-        api_key, model,
-        system_prompt="Você extrai fatos de páginas de mangá com precisão, sem inventar nada.",
-        content_blocks=content,
-        max_tokens=1500,
-    )
-    try:
-        cleaned = raw.strip().strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        return {"summary": raw, "characters": [], "key_events": [], "notable_quotes": []}
-
-
-def _merge_into_overall_summary(existing_summary, chapter_summary, work, chapter_num, api_key, model):
-    """Segundo passo, só texto (barato): funde o resumo do capítulo novo
-    no resumo geral da obra, mantendo detalhe."""
-    prompt = (
-        f"Resumo geral atual da obra '{work}':\n{existing_summary or '(ainda não há resumo — este é o primeiro capítulo processado)'}\n\n"
-        f"Resumo do capítulo {chapter_num}, recém-processado:\n{chapter_summary}\n\n"
-        "Reescreva o resumo geral da obra incorporando esse capítulo novo. "
-        "Mantenha o máximo de detalhe relevante (personagens, eventos, arcos), "
-        "em prosa corrida, sem inventar nada além do que já estava nos dois textos acima."
-    )
-    return _call_anthropic(
-        api_key, model,
-        system_prompt="Você mantém um resumo cumulativo detalhado e fiel de uma obra, capítulo a capítulo.",
-        content_blocks=[{"type": "text", "text": prompt}],
-        max_tokens=2000,
-    )
-
-
-# --- Orquestração (o "agente") ---
-
-def oracle_ingest(folder_path: str):
-    cfg = _load_config()
-    api_key = cfg["anthropic"]["api_key"]
-    model = cfg["anthropic"]["model"]
+def _call_anthropic(api_key, model, system_prompt, content, max_tokens=1800):
     if not api_key:
-        return {"ok": False, "error": "Chave da Anthropic não configurada em dok-tools/config/config.yaml"}
+        raise ValueError("Chave da Anthropic não configurada.")
+    headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+    payload = {"model": model, "max_tokens": max_tokens, "system": system_prompt, "messages": [{"role": "user", "content": content}]}
+    r = requests.post(ANTHROPIC_URL, headers=headers, json=payload, timeout=180)
+    data = r.json()
+    if r.status_code != 200:
+        raise RuntimeError(data.get("error", {}).get("message", r.text))
+    return "\n".join(x.get("text", "") for x in data.get("content", []) if x.get("type") == "text").strip()
 
-    knowledge = _load_knowledge()
-    pdfs = discover_pdfs(folder_path)
 
-    report = {"ok": True, "chapters_added": [], "chapters_skipped": [], "errors": []}
+def _call_ai(provider, api_key, model, system_prompt, content, max_tokens=1800):
+    if provider == "openrouter":
+        return _call_openrouter(api_key, model, system_prompt, content, max_tokens)
+    return _call_anthropic(api_key, model, system_prompt, content, max_tokens)
 
-    for item in pdfs:
-        work = item["work"]
-        chapter_num = item["chapter"]
-        if chapter_num is None:
-            report["errors"].append(f"Não achei número de capítulo em {item['filename']}")
-            continue
 
-        knowledge.setdefault(work, {"overall_summary": "", "chapters": {}})
-        if str(chapter_num) in knowledge[work]["chapters"]:
-            report["chapters_skipped"].append(f"{work} cap {chapter_num} (já processado)")
-            continue
+def _vision_content(pages):
+    blocks = [{"type": "text", "text": "Analise todas as páginas abaixo na ordem. Descreva fatos visíveis, diálogos legíveis, ações, personagens, cenário, continuidade e informações narrativas. NÃO resuma pulando páginas. Se algo não puder ser lido, marque como [ilegível]. Separe claramente cada página."}]
+    for page_num, b64 in pages:
+        blocks.append({"type": "text", "text": f"\n--- PÁGINA {page_num} ---"})
+        blocks.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+    return blocks
 
-        try:
-            images = _pdf_to_b64_images(item["path"])
-            chapter_data = _interpret_chapter(images, work, chapter_num, api_key, model)
-            knowledge[work]["chapters"][str(chapter_num)] = chapter_data
-            knowledge[work]["overall_summary"] = _merge_into_overall_summary(
-                knowledge[work]["overall_summary"],
-                chapter_data.get("summary", ""),
-                work, chapter_num, api_key, model,
-            )
-            _save_knowledge(knowledge)  # salva a cada capítulo — não perde progresso se cair
-            report["chapters_added"].append(f"{work} cap {chapter_num}")
-        except Exception as exc:
-            report["errors"].append(f"{work} cap {chapter_num}: {exc}")
 
-    return report
+def _analyze_pages(pdf_path, start, end, provider, api_key, model):
+    pages = _pdf_page_images(pdf_path, start, end)
+    return _call_ai(
+        provider, api_key, model,
+        "Você é um leitor de mangá extremamente cuidadoso. Sua prioridade é cobertura completa das páginas e fidelidade ao que está visível.",
+        _vision_content(pages),
+        max_tokens=2200,
+    )
+
+
+def _chapter_consolidation(page_notes: str, filename: str, chapter_num: int | None, provider, api_key, model):
+    prompt = (
+        f"Documento: {filename}\nCapítulo: {chapter_num or 'não identificado'}\n\n"
+        "Registros detalhados das páginas:\n" + page_notes + "\n\n"
+        "Transforme isso em um REGISTRO COMPLETO DO CAPÍTULO. Preserve a ordem dos acontecimentos, "
+        "não omita acontecimentos relevantes, identifique personagens e relações somente quando sustentados "
+        "pelas páginas, registre revelações, conflitos, mudanças de cenário e falas importantes. "
+        "Não invente. Não faça um resumo de duas linhas: este documento será a fonte para a memória futura. "
+        "Use Markdown com os títulos: Resumo detalhado, Personagens, Acontecimentos, Revelações, Pendências e Observações."
+    )
+    return _call_ai(
+        provider, api_key, model,
+        "Você consolida a leitura de um capítulo de mangá sem perder informação narrativa.",
+        prompt,
+        max_tokens=2800,
+    )
+
+
+def _update_work_memory(existing: str, chapter_record: str, work: str, chapter_num: int | None, provider, api_key, model):
+    prompt = (
+        f"MEMÓRIA ATUAL DA OBRA '{work}':\n{existing or '(primeiro capítulo)'}\n\n"
+        f"NOVO REGISTRO — CAPÍTULO {chapter_num or '?'}:\n{chapter_record}\n\n"
+        "Atualize a memória cumulativa da obra. Não apague fatos anteriores só porque o novo capítulo não os menciona. "
+        "Incorpore somente fatos sustentados pelos registros. Preserve nomes, acontecimentos, relações, mistérios, "
+        "estado atual dos personagens e continuidade. Não invente e não transforme hipótese em fato. "
+        "Escreva em Markdown, de forma compacta mas suficientemente detalhada para responder futuramente a perguntas sobre a obra."
+    )
+    return _call_ai(
+        provider, api_key, model,
+        "Você mantém a memória cumulativa e fiel de uma obra de mangá, capítulo após capítulo.",
+        prompt,
+        max_tokens=3200,
+    )
+
+
+def oracle_register_chapter(file_path: str) -> dict:
+    """Registra um único capítulo. O arquivo local é aberto pelo DOK.
+
+    São gerados/atualizados exatamente três Markdown: pages.md, chapters.md e work.md.
+    """
+    target = Path(os.path.abspath(os.path.expanduser(file_path)))
+    if not target.exists() or not target.is_file():
+        return {"ok": False, "error": f"Arquivo não encontrado: {file_path}"}
+    if target.suffix.lower() != ".pdf":
+        return {"ok": False, "error": "O registro de capítulo atualmente espera um PDF."}
+
+    cfg = _load_config()
+    provider, api_key, model = _provider_config(cfg)
+    work = _infer_work_name(target.name)
+    chapter_num = _chapter_number(target.name)
+    pages_path, chapters_path, work_path = _paths(work)
+    existing_chapters = _read(chapters_path)
+    marker = f"## Capítulo {chapter_num}" if chapter_num is not None else f"## {target.name}"
+    if marker in existing_chapters:
+        return {"ok": True, "skipped": True, "work": work, "chapter": chapter_num, "message": "Este capítulo já está registrado."}
+
+    oracle_cfg = cfg.get("oracle", {}) or {}
+    batch_size = max(1, int(oracle_cfg.get("pages_per_batch", 4)))
+    zoom = float(oracle_cfg.get("render_zoom", 1.35))
+    # Passa o zoom pela função sem manter imagens na memória entre lotes.
+    doc = pymupdf.open(str(target))
+    total_pages = len(doc)
+    doc.close()
+
+    page_notes_parts = []
+    for start in range(0, total_pages, batch_size):
+        end = min(start + batch_size, total_pages)
+        pages = _pdf_page_images(str(target), start, end, zoom=zoom)
+        notes = _call_ai(
+            provider, api_key, model,
+            "Você é um leitor de mangá extremamente cuidadoso. Cubra TODAS as páginas recebidas, na ordem. Não pule páginas. Diferencie texto legível de interpretação visual e marque incertezas.",
+            _vision_content(pages),
+            max_tokens=2200,
+        )
+        block = f"### Páginas {start + 1}–{end}\n\n{notes}"
+        page_notes_parts.append(block)
+        _append(pages_path, f"# Leitura do capítulo {chapter_num or target.name}\n\n**Arquivo:** `{target.name}`\n\n{block}")
+
+    page_notes = "\n\n".join(page_notes_parts)
+    chapter_record = _chapter_consolidation(page_notes, target.name, chapter_num, provider, api_key, model)
+    _append(chapters_path, f"{marker} — `{target.name}`\n\n{chapter_record}")
+
+    existing_work = _read(work_path)
+    updated_work = _update_work_memory(existing_work, chapter_record, work, chapter_num, provider, api_key, model)
+    work_path.parent.mkdir(parents=True, exist_ok=True)
+    work_path.write_text(f"# Memória da obra: {work}\n\n{updated_work.strip()}\n", encoding="utf-8")
+
+    return {
+        "ok": True,
+        "work": work,
+        "chapter": chapter_num,
+        "pages": total_pages,
+        "files": [str(p) for p in (pages_path, chapters_path, work_path)],
+        "message": f"Capítulo registrado: {work} — capítulo {chapter_num or '?'} ({total_pages} páginas).",
+    }
+
+
+def oracle_ingest(folder_path: str) -> dict:
+    """Mantém compatibilidade: registra todos os PDFs encontrados recursivamente."""
+    root = Path(os.path.abspath(os.path.expanduser(folder_path)))
+    if not root.is_dir():
+        return {"ok": False, "error": f"Pasta não encontrada: {folder_path}"}
+    results = []
+    for pdf in sorted(root.rglob("*.pdf")):
+        results.append(oracle_register_chapter(str(pdf)))
+    return {"ok": all(r.get("ok") for r in results), "chapters": results}
 
 
 def oracle_query(work: str = None):
-    knowledge = _load_knowledge()
+    root = _memory_root()
     if work:
-        return knowledge.get(work.lower(), {"error": f"Nenhum conhecimento registrado pra '{work}'"})
-    return knowledge
+        path = _work_dir(work) / "work.md"
+        return {"ok": path.exists(), "work": work, "memory": _read(path)}
+    works = []
+    if root.exists():
+        for p in sorted(root.iterdir()):
+            if p.is_dir() and (p / "work.md").exists():
+                works.append(p.name)
+    return {"ok": True, "works": works}
 
 
 def oracle_status():
-    knowledge = _load_knowledge()
-    return {
-        work: {
-            "chapters_ingested": len(data.get("chapters", {})),
-            "has_overall_summary": bool(data.get("overall_summary")),
+    root = _memory_root()
+    result = {}
+    if not root.exists():
+        return result
+    for work_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        chapters = _read(work_dir / "chapters.md")
+        result[work_dir.name] = {
+            "has_pages": (work_dir / "pages.md").exists(),
+            "has_chapters": bool(chapters),
+            "has_work_memory": (work_dir / "work.md").exists(),
         }
-        for work, data in knowledge.items()
-    }
+    return result

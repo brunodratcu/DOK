@@ -7,7 +7,7 @@ class AnthropicProvider(Provider):
     name = "anthropic"
     def __init__(self, api_key):
         self.api_key = api_key
-    def chat(self, *, model, system_prompt, messages, tools=None, max_tokens=800):
+    def chat(self, *, model, system_prompt, messages, tools=None, max_tokens=800, tool_choice="auto"):
         if not self.api_key:
             raise ProviderError("Chave da Anthropic não configurada.")
 
@@ -30,6 +30,9 @@ class AnthropicProvider(Provider):
         payload = {"model": model, "max_tokens": max_tokens, "system": system_prompt, "messages": anthropic_messages}
         if tools:
             payload["tools"] = [{"name": t["function"]["name"], "description": t["function"].get("description", ""), "input_schema": t["function"]["parameters"]} for t in tools]
+            # Formato da Anthropic é diferente do OpenAI: {"type": "any"} força
+            # uso de alguma ferramenta, {"type": "auto"} deixa o modelo decidir.
+            payload["tool_choice"] = {"type": "any"} if tool_choice == "required" else {"type": "auto"}
         try:
             r = requests.post(URL, headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, json=payload, timeout=90)
             data = r.json()

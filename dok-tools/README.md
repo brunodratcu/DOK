@@ -1,147 +1,122 @@
 # dok-tools
 
-Servidor MCP independente — **não depende do projeto DOK**, não
-importa nada de lá. Expõe 4 ferramentas de diagnóstico:
+Servidor MCP independente do DOK. Ele expõe ferramentas de diagnóstico,
+Oráculo de mangás e, agora, quatro ferramentas locais de filesystem em modo
+**somente leitura**:
 
-- `check_network_tool` — ping + resolução DNS de um host
-- `check_website_tool` — status HTTP, tempo de resposta, validade SSL
-- `check_device_mac_tool` — dispositivo online na rede local (via ARP)
-- `whois_domain_tool` — registro público WHOIS de um domínio
+- `list_directory` — lista arquivos e subpastas.
+- `read_file` — lê arquivos de texto.
+- `search_files` — procura arquivos por nome (`pattern`) e/ou texto (`query`).
+- `file_info` — retorna metadados de arquivo ou diretório.
 
-Tudo é **leitura**, sem alterar nada, sem scan agressivo — checagens
-básicas de saúde, não ferramenta ofensiva.
+## Filesystem local
 
-## Instalar
+As quatro ferramentas rodam no mesmo computador que inicia o `dok-tools`,
+porque o DOK abre o servidor MCP por `stdio`. Elas não usam internet para
+ler os arquivos.
 
-Sem venv — instala direto no Python global:
+Por segurança, o acesso é limitado às pastas declaradas em:
 
+```text
+ dok-tools/config/config.yaml
 ```
+
+Exemplo Windows:
+
+```yaml
+filesystem:
+  allowed_paths:
+    - "C:/Users/SEU_USUARIO/Documents"
+    - "D:/Mangas"
+  max_read_chars: 40000
+  max_results: 200
+  max_search_file_bytes: 5242880
+```
+
+Exemplo Linux/Raspberry Pi:
+
+```yaml
+filesystem:
+  allowed_paths:
+    - "~/Documents"
+    - "~/mangas"
+  max_read_chars: 40000
+  max_results: 200
+  max_search_file_bytes: 5242880
+```
+
+Caminhos relativos são resolvidos a partir da pasta do DOK. Se nenhuma pasta
+for configurada, a raiz do próprio projeto `dok/` é usada. Caminhos fora das
+raízes autorizadas são bloqueados, inclusive tentativas de escapar com `..`
+ou links simbólicos.
+
+### Limites
+
+- `read_file` lê apenas texto UTF-8 e limita o conteúdo retornado.
+- `search_files` ignora arquivos binários e, por padrão, não inspeciona
+  arquivos maiores que 5 MB.
+- `list_directory` e `search_files` limitam a quantidade de resultados.
+- Nenhuma das quatro ferramentas altera, cria ou apaga arquivos.
+
+## As outras ferramentas
+
+Diagnóstico:
+
+- `check_network_tool`
+- `check_website_tool`
+- `check_device_mac_tool`
+- `whois_domain_tool`
+
+Oráculo:
+
+- `oracle_ingest_tool`
+- `oracle_query_tool`
+- `oracle_status_tool`
+
+## Teste
+
+Instale as dependências:
+
+```bash
 pip install -r requirements.txt
 ```
 
-No Raspberry Pi OS (Bookworm ou mais novo), o `pip` bloqueia instalação
-global por padrão. Use:
+No Raspberry Pi OS, se necessário:
 
-```
+```bash
 pip install --break-system-packages -r requirements.txt
 ```
 
-## Testar sozinho (sem o DOK)
+Para testar as quatro funções sem iniciar o MCP:
 
-Este servidor fala MCP, não é um programa que você "roda e vê algo na
-tela" — ele fica esperando um cliente se conectar. Pra testar
-interativamente, use o **MCP Inspector**:
-
+```bash
+python -m unittest tests.test_filesystem
 ```
+
+Para testar como servidor MCP, use o MCP Inspector:
+
+```bash
 npx @modelcontextprotocol/inspector python server.py
 ```
 
-Isso abre uma interface web onde você vê as 4 ferramentas listadas e
-pode chamar cada uma manualmente, com os resultados reais na tela.
-
-## Usar com o DOK
-
-O DOK já vem configurado pra achar esta pasta automaticamente, contanto
-que ela fique **ao lado** da pasta `dok/` (mesmo nível, não uma dentro
-da outra):
-
-```
-alguma-pasta/
-├── dok/
-└── dok-tools/
-```
-
-Se você mover `dok-tools/` pra outro lugar, ajuste o caminho em
-`dok/config/config.yaml` → `tools_server.path`.
-
-## Usar com o Claude Desktop (bônus da arquitetura MCP)
-
-Como é um servidor MCP padrão, funciona também plugado direto no
-Claude Desktop, fora do DOK. No arquivo de configuração do Claude
-Desktop, adicione:
-
-```json
-{
-  "mcpServers": {
-    "dok-tools": {
-      "command": "python",
-      "args": ["/caminho/completo/pra/dok-tools/server.py"]
-    }
-  }
-}
-```
-
-## Oráculo — leitura de mangá (PDF) com IA de visão
-
-Três ferramentas extras, separadas das 4 de diagnóstico:
-
-- **`oracle_ingest_tool(folder_path)`** — processa uma pasta com PDFs
-  organizados por obra (subpasta) e capítulo (nome do arquivo). Pode
-  demorar bastante (é IA de visão, página por página) — salva o
-  progresso a cada capítulo, então dá pra interromper sem perder nada.
-- **`oracle_query_tool(work=None)`** — consulta o que já foi
-  processado (resumo geral da obra + lista de capítulos)
-- **`oracle_status_tool()`** — quantos capítulos de cada obra já
-  foram processados
-
-**Convenção de pastas esperada:**
-```
-pasta_raiz/
-├── nng/
-│   ├── capitulo_001.pdf
-│   └── capitulo_002.pdf
-├── tbv/
-│   └── capitulo_007.pdf
-└── ds/
-    └── capitulo_012.pdf
-```
-O nome da subpasta vira o identificador da obra; o número do
-capítulo é extraído do nome do arquivo (primeira sequência de dígitos
-encontrada).
-
-**Armazenamento:** um único arquivo, `data/oracle/knowledge.json` —
-por obra, contém o resumo geral (atualizado incrementalmente a cada
-capítulo novo) e os capítulos processados. Não é um arquivo por
-capítulo — de propósito, pra manter poucos arquivos no disco.
-
-**Configuração própria:** o Oráculo precisa de uma chave da Anthropic
-só dele, em `config/config.yaml` (dentro do `dok-tools`, separado da
-chave do DOK):
-```yaml
-anthropic:
-  api_key: "sk-ant-..."
-  model: "claude-haiku-4-5-20251001"
-```
-
-**Custo:** cada capítulo processado é 1 chamada de visão (todas as
-páginas do capítulo juntas) + 1 chamada de texto (pra atualizar o
-resumo geral). Pra um volume grande (~150 capítulos), estime de
-antemão antes de rodar tudo de uma vez — não tem limite de orçamento
-embutido nesta ferramenta.
+No DOK, nenhuma alteração no cliente MCP é necessária: o cliente já chama
+`list_tools()` e descobre automaticamente as novas ferramentas.
 
 ## Estrutura
 
-```
+```text
 dok-tools/
-├── server.py              # servidor MCP — registra as 7 ferramentas
+├── server.py
 ├── requirements.txt
 ├── config/
-│   └── config.yaml           # chave própria (só usada pelo Oráculo)
+│   └── config.yaml
 ├── data/
 │   └── oracle/
-│       └── knowledge.json      # único arquivo de conhecimento do Oráculo
 └── tools/
-    ├── network.py            # lógica real de cada ferramenta,
-    ├── website.py              # sem nenhuma dependência do MCP —
-    ├── device.py                 # são funções Python comuns, testáveis
-    ├── domain.py                   # isoladas
-    └── oracle.py                     # ingestão + consulta de mangá
+    ├── device.py
+    ├── domain.py
+    ├── filesystem.py
+    ├── network.py
+    ├── oracle.py
+    └── website.py
 ```
-
-## Adicionando uma ferramenta nova
-
-1. Escreva a função em `tools/` (recebe parâmetros simples, devolve um dict)
-2. Registre em `server.py` com `@mcp.tool()`, com um docstring claro —
-   é a partir do docstring que o Claude decide quando usar a ferramenta
-3. Pronto — nenhuma mudança necessária do lado do DOK, ele descobre a
-   ferramenta nova automaticamente na próxima vez que perguntar a lista

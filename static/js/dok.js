@@ -203,7 +203,7 @@ attachFolderBtn.addEventListener("click", async () => {
     }
     try {
         const path = await window.pywebview.api.pick_folder();
-        if (path) insertAttachedPath(path);
+        if (path) insertAttachedPath(`[Pasta anexada] ${path}`);
     } catch (err) {
         console.error("Falha ao escolher pasta", err);
     }
@@ -217,7 +217,7 @@ attachFilesBtn.addEventListener("click", async () => {
     }
     try {
         const paths = await window.pywebview.api.pick_files();
-        if (paths && paths.length) insertAttachedPath(paths.join(", "));
+        if (paths && paths.length) insertAttachedPath(paths.map(path => `[Arquivo anexado] ${path}`).join("\n"));
     } catch (err) {
         console.error("Falha ao escolher arquivos", err);
     }

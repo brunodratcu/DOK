@@ -1,6 +1,33 @@
 # Config do dok-tools. Usada só pelas ferramentas que precisam de IA
 # diretamente (hoje: o Oráculo, pra interpretar páginas de manga).
 # As outras 4 ferramentas (rede, site, MAC, whois) não precisam disso.
+provider: "openrouter"
+
+openrouter:
+  api_key: ""
+  model: "inclusionai/ling-3.0-flash-fin:free"
+  max_tokens: 700
+  history_limit: 12
+
 anthropic:
   api_key: ""
-  model: "claude-haiku-4-5-20251001"   # visão + resumo — barato o bastante pro volume
+  model: "claude-haiku-4-5-20251001"
+  max_tokens: 700
+  history_limit: 12
+
+
+# Filesystem local — somente leitura nesta primeira versão.
+# Adicione aqui as pastas que o DOK pode enxergar.
+# Caminhos com ~ apontam para a pasta HOME do usuário.
+filesystem:
+  allow_all: true
+  max_read_chars: 40000
+  max_results: 200
+  max_search_file_bytes: 5242880
+
+
+# Memória narrativa do DOK em Markdown.
+oracle:
+  memory_path: "data/oracle"
+  pages_per_batch: 4
+  render_zoom: 1.35

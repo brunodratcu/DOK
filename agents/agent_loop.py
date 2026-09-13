@@ -1,10 +1,26 @@
 """Orquestrador central do DOK: modelo -> ferramenta/MCP -> resultado -> modelo."""
+import re
+
 import mcp_client
 from core.permissions import is_allowed
 from core.usage import normalize_usage
 from tools.registry import mcp_to_openai, parse_tool_arguments, DELEGATE_TOOL
 
 MAX_TURNS = 6
+
+# Detecta menção a caminho de arquivo/pasta na mensagem — usado pra
+# FORÇAR o uso de ferramenta na primeira rodada, porque modelos
+# gratuitos tendem a "saber" o caminho e mesmo assim responder em
+# prosa que não têm acesso, em vez de chamar read_file/list_directory
+# sozinhos (mesmo quando a API deles diz suportar tool use).
+_PATH_PATTERN = re.compile(
+    r"([a-zA-Z]:\\[^\s]+|/[^\s]+/[^\s]+|~/[^\s]+|\.\/[^\s]+)"
+)
+
+def _looks_like_path(text):
+    if isinstance(text, list):
+        return False
+    return bool(_PATH_PATTERN.search(text or ""))
 
 def _sum_usage(total, new):
     for k, v in (new or {}).items():
@@ -26,9 +42,18 @@ def run_agent(provider, *, model, system_prompt, history, user_text, tools_serve
     trace = [f"MCP: {len(mcp_tools)} ferramenta(s) disponível(is)"]
     if unavailable: trace.append(unavailable)
     usage = {}
-    for _ in range(max_turns):
+
+    # Só força na PRIMEIRA rodada — depois disso o modelo já viu o
+    # resultado da ferramenta (ou decidiu não precisar), e forçar de
+    # novo em toda rodada causaria loop chamando ferramenta à toa.
+    force_tool_choice = "required" if (tools and _looks_like_path(user_text)) else "auto"
+    if force_tool_choice == "required":
+        trace.append("Caminho de arquivo detectado na mensagem — forçando uso de ferramenta.")
+
+    for turn_index in range(max_turns):
+        tool_choice = force_tool_choice if turn_index == 0 else "auto"
         try:
-            response = provider.chat(model=model, system_prompt=system_prompt, messages=messages, tools=tools, max_tokens=max_tokens)
+            response = provider.chat(model=model, system_prompt=system_prompt, messages=messages, tools=tools, max_tokens=max_tokens, tool_choice=tool_choice)
         except Exception as exc:
             return False, str(exc), trace, usage
         _sum_usage(usage, normalize_usage(response.get("usage")))

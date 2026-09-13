@@ -1,4 +1,5 @@
 """Provider OpenRouter usando a API compatível com OpenAI."""
+import os
 import requests
 from .base import Provider, ProviderError
 
@@ -10,11 +11,11 @@ class OpenRouterProvider(Provider):
     name = "openrouter"
 
     def __init__(self, api_key, http_referer="https://github.com/brunodratcu/dok", app_title="DOK"):
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
         self.http_referer = http_referer
         self.app_title = app_title
 
-    def chat(self, *, model, system_prompt, messages, tools=None, max_tokens=800):
+    def chat(self, *, model, system_prompt, messages, tools=None, max_tokens=800, tool_choice="auto"):
         if not self.api_key:
             raise ProviderError("Chave da OpenRouter não configurada. Rode: ./dok key openrouter set")
         payload = {
@@ -24,7 +25,7 @@ class OpenRouterProvider(Provider):
         }
         if tools:
             payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice  # "auto" ou "required" — formato OpenAI aceita string direto
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

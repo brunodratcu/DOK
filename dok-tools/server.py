@@ -17,7 +17,15 @@ from tools.network import check_network
 from tools.website import check_website
 from tools.device import check_device_mac
 from tools.domain import whois_domain
-from tools.oracle import oracle_ingest, oracle_query, oracle_status
+from tools.oracle import oracle_ingest, oracle_query, oracle_status, oracle_register_chapter
+from tools.filesystem import (
+    list_directory as fs_list_directory,
+    read_file as fs_read_file,
+    search_files as fs_search_files,
+    file_info as fs_file_info,
+    write_file as fs_write_file,
+    edit_file as fs_edit_file,
+)
 
 mcp = FastMCP("dok-tools")
 
@@ -63,6 +71,17 @@ def oracle_ingest_tool(folder_path: str) -> dict:
 
 
 @mcp.tool()
+def oracle_register_chapter_tool(file_path: str) -> dict:
+    """Registra um único capítulo PDF na memória narrativa do DOK.
+    O DOK abre o arquivo local, lê todas as páginas em pequenos lotes,
+    consolida o capítulo e atualiza três Markdown persistentes: leitura
+    das páginas, registros dos capítulos e memória cumulativa da obra.
+    O nome da obra é inferido somente do nome do arquivo depois da leitura.
+    """
+    return oracle_register_chapter(file_path)
+
+
+@mcp.tool()
 def oracle_query_tool(work: str = None) -> dict:
     """Consulta o conhecimento já processado do Oráculo. Sem 'work',
     devolve todas as obras. Com 'work' (ex: 'nng', 'tbv', 'ds'),
@@ -75,6 +94,42 @@ def oracle_status_tool() -> dict:
     """Mostra quantos capítulos de cada obra já foram processados —
     útil pra saber o que falta ou o que foi adicionado recentemente."""
     return oracle_status()
+
+
+@mcp.tool()
+def list_directory(path: str = ".") -> dict:
+    """Lista os arquivos e subpastas de um diretório autorizado na máquina local."""
+    return fs_list_directory(path)
+
+
+@mcp.tool()
+def read_file(path: str, max_chars: int = None) -> dict:
+    """Lê o conteúdo de um arquivo de texto autorizado na máquina local. Arquivos binários não são lidos."""
+    return fs_read_file(path, max_chars=max_chars)
+
+
+@mcp.tool()
+def search_files(path: str = ".", query: str = None, pattern: str = None, max_results: int = None) -> dict:
+    """Pesquisa arquivos em uma pasta autorizada por texto (query) e/ou nome (pattern, como *.py)."""
+    return fs_search_files(path, query=query, pattern=pattern, max_results=max_results)
+
+
+@mcp.tool()
+def file_info(path: str) -> dict:
+    """Retorna metadados de um arquivo ou diretório autorizado na máquina local."""
+    return fs_file_info(path)
+
+
+@mcp.tool()
+def write_file(path: str, content: str, overwrite: bool = False) -> dict:
+    """Cria um arquivo novo (ou sobrescreve, se overwrite=true) numa pasta autorizada."""
+    return fs_write_file(path, content, overwrite=overwrite)
+
+
+@mcp.tool()
+def edit_file(path: str, old_text: str, new_text: str) -> dict:
+    """Substitui um trecho exato (old_text) de um arquivo existente por new_text. old_text precisa ser único no arquivo."""
+    return fs_edit_file(path, old_text, new_text)
 
 
 if __name__ == "__main__":
