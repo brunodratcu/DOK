@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 from agents.agent_loop import run_agent
 import agents.agent_loop as loop
 
@@ -27,9 +30,19 @@ class FakeSession:
         return False
 
     async def list_tools(self):
-        return [{"name": "ping", "description": "test", "input_schema": {"type": "object", "properties": {}}}]
+        return [
+            {"name": "ping", "description": "test", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "edit_file", "description": "edita arquivo", "input_schema": {"type": "object", "properties": {}}},
+        ]
 
     async def call_tool(self, name, arguments):
+        if name == "edit_file":
+            # Simula a ferramenta real: escreve o new_text de verdade
+            # no arquivo, pro Verification Engine ter algo real pra checar.
+            path = arguments["path"]
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(arguments["new_text"])
+            return {"path": path, "replaced": True}
         return {"ok": True}
 
 
@@ -40,41 +53,58 @@ def test_agent_executes_mcp_tool(monkeypatch):
     assert usage["prompt_tokens"] == 5
 
 
-def test_subagent_delegation_does_not_nest_event_loop(monkeypatch):
-    """Regressão: chamar run_subagent de dentro de um turno já rodando
-    (via `asyncio.run()`) não pode tentar abrir um SEGUNDO
-    `asyncio.run()` — isso derruba com 'cannot be called from a
-    running event loop'. O delegate precisa ser async e usar
-    `run_agent_async` (com await), nunca `run_agent` (que faz
-    asyncio.run) de dentro do loop."""
+def test_edit_file_triggers_verification_and_passes(monkeypatch):
+    """Depois de um edit_file bem-sucedido, o Verification Engine roda
+    sozinho e o resultado (com 'passed': true) volta como parte da
+    observação da ferramenta."""
     monkeypatch.setattr(loop, "MCPSession", FakeSession)
 
-    class DelegatingProvider:
-        def __init__(self):
-            self.calls = 0
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "arquivo.py")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("x = 1\n")
 
-        def chat(self, **kwargs):
-            self.calls += 1
-            if self.calls == 1:
-                return {"text": "", "tool_calls": [{"id": "1", "type": "function", "function": {
-                    "name": "run_subagent", "arguments": '{"task": "pesquisa", "role": "pesquisador"}'
-                }}], "usage": {}}
-            return {"text": "resultado final com ajuda do sub-agente", "tool_calls": [], "usage": {}}
+        class EditingProvider:
+            def __init__(self):
+                self.calls = 0
+                self.seen_tool_messages = []
 
-    async def delegate(task, role):
-        # Simula o SubAgentManager.run_async chamando run_agent_async
-        # de novo, DENTRO do mesmo loop — é exatamente o caminho que
-        # quebrava antes da correção.
-        ok, reply, _, _ = await loop.run_agent_async(
-            DelegatingProvider(), model="x", system_prompt="x", history=[],
-            user_text=task, tools_server_path="x", max_tokens=700,
-            tools_python_cmd=None, max_turns=2, delegate=None, permissions_cfg={},
+            def chat(self, *, messages, **kwargs):
+                self.calls += 1
+                # Guarda a última mensagem de "tool" que o loop mandou de volta
+                tool_msgs = [m for m in messages if m.get("role") == "tool"]
+                if tool_msgs:
+                    self.seen_tool_messages.append(tool_msgs[-1]["content"])
+                if self.calls == 1:
+                    return {"text": "", "tool_calls": [{"id": "1", "type": "function", "function": {
+                        "name": "edit_file",
+                        "arguments": f'{{"path": "{path}", "old_text": "x = 1", "new_text": "x = 2"}}'
+                    }}], "usage": {}}
+                return {"text": "editei e verifiquei", "tool_calls": [], "usage": {}}
+
+        provider = EditingProvider()
+        ok, reply, trace, usage = run_agent(
+            provider, model="x", system_prompt="x", history=[],
+            user_text="edita o arquivo", tools_server_path="x",
         )
-        return reply if ok else f"falhou: {reply}"
 
-    ok, reply, trace, usage = run_agent(
-        DelegatingProvider(), model="x", system_prompt="x", history=[],
-        user_text="pesquisa algo", tools_server_path="x", delegate=delegate,
-    )
-    assert ok
-    assert "resultado final" in reply
+        assert ok
+        # A verificação de fato rodou e chegou no modelo, com passed=True
+        assert any("'passed': True" in msg for msg in provider.seen_tool_messages)
+        assert any("Verificação:" in t for t in trace)
+
+
+def test_verification_catches_python_syntax_error(monkeypatch):
+    """Se o edit_file deixar o arquivo com sintaxe Python inválida, a
+    camada de sintaxe do Verification Engine tem que pegar isso."""
+    from core.verification import verify_file
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "quebrado.py")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("def funcao(:\n    pass\n")  # sintaxe inválida de propósito
+
+        resultado = verify_file(path)
+        assert resultado["passed"] is False
+        syntax_check = next(c for c in resultado["checks"] if c["check"] == "syntax")
+        assert syntax_check["passed"] is False

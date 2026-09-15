@@ -34,10 +34,16 @@ O agente só chama `provider.chat(...)`. Portanto o DOK não é mais preso ao SD
 
 Contém a inteligência de execução.
 
-- `agent_loop.py`: agente principal. Modelo → tool call → MCP → resultado → modelo.
-- `subagents.py`: permite que o agente principal delegue uma tarefa isolada a outro agente.
+- `agent_loop.py`: agente principal. Modelo → tool call → MCP → resultado
+  → modelo. Depois de `write_file`/`edit_file`, roda o Verification
+  Engine (`core/verification.py`) automaticamente e devolve o resultado
+  como parte da observação — se falhar, o modelo vê e corrige na
+  próxima rodada.
 
-Sub-agents têm limite próprio de etapas e não recebem a ferramenta de criar outros sub-agents, evitando recursão descontrolada.
+(Sub-agents foram removidos — geravam um bug de loop assíncrono
+aninhado sem trazer benefício suficiente pra justificar a
+complexidade. Se uma necessidade real de delegação aparecer de novo,
+reavaliar do zero.)
 
 ## Sem Memory
 
@@ -67,7 +73,7 @@ Flask / Desktop
 
 1. streaming de respostas;
 2. tela de seleção de provider/modelo;
-3. mostrar sub-agent e ferramentas na UI;
-4. aprovação antes de ferramentas perigosas;
+3. mostrar ferramentas usadas (e resultado da verificação) na UI;
+4. aprovação antes de ferramentas perigosas / política pra `execute_command`;
 5. fallback de modelos OpenRouter;
-6. testes automatizados do agent loop.
+6. testes automatizados do agent loop (em andamento — `tests/test_agent_loop.py`).

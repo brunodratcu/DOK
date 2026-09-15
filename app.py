@@ -10,7 +10,6 @@ from flask import Flask, render_template, jsonify, request
 
 from providers import create_provider
 from providers.openrouter import list_free_models
-from agents.subagents import SubAgentManager
 import chat_store
 import paths
 from agents import agent_loop
@@ -191,16 +190,6 @@ def api_send_message(chat_id):
     history_raw = chat["messages"][-history_limit:]
     history = [{"role": m["role"], "content": m["content"]} for m in history_raw]
     provider = create_provider(cfg)
-    manager = SubAgentManager(provider, tools_server_path, tools_python_cmd, max_turns=4)
-
-    async def delegate(task, role):
-        sub_ok, sub_reply, sub_trace, _sub_usage = await manager.run_async(
-            task, role, model=provider_cfg.get("model"),
-            system_prompt=cfg["personality"]["system_prompt"],
-            max_tokens=provider_cfg.get("max_tokens", 700),
-            permissions_cfg=cfg,
-        )
-        return sub_reply if sub_ok else f"Sub-agent falhou: {sub_reply}"
 
     ok, reply, trace, usage = agent_loop.run_agent(
         provider,
@@ -211,7 +200,6 @@ def api_send_message(chat_id):
         tools_server_path=tools_server_path,
         tools_python_cmd=tools_python_cmd,
         max_tokens=provider_cfg.get("max_tokens", 800),
-        delegate=delegate,
         permissions_cfg=cfg,
     )
 
