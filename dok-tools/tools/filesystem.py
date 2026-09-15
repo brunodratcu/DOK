@@ -9,18 +9,12 @@ por ``..`` ou links simbólicos.
 """
 from __future__ import annotations
 
-import base64
 import fnmatch
 import os
 from pathlib import Path
 from typing import Iterable
 
 import yaml
-
-try:
-    import pymupdf
-except ImportError:  # PDF support is optional at import time
-    pymupdf = None
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "config" / "config.yaml"
@@ -163,66 +157,11 @@ def _is_probably_text(data: bytes) -> bool:
         return False
 
 
-def _read_pdf(target: Path, limit: int) -> dict:
-    """Lê PDF preservando texto e, quando necessário, páginas como imagens.
-
-    PDFs escaneados/mangá normalmente não têm camada de texto. Nesses casos
-    devolvemos poucas páginas em JPEG/base64 para o modelo multimodal,
-    evitando carregar o documento inteiro na memória/contexto.
-    """
-    if pymupdf is None:
-        raise RuntimeError("Suporte a PDF indisponível: instale PyMuPDF.")
-
-    with pymupdf.open(target) as doc:
-        page_count = len(doc)
-        text_parts = []
-        text_pages = 0
-        for idx in range(page_count):
-            text = doc[idx].get_text("text").strip()
-            if text:
-                text_pages += 1
-                text_parts.append(f"--- Página {idx + 1} ---\n{text}")
-            if sum(len(x) for x in text_parts) >= limit:
-                break
-
-        text = "\n\n".join(text_parts)[:limit]
-        result = {
-            "path": _display_path(target),
-            "content": text,
-            "size_bytes": target.stat().st_size,
-            "file_type": "pdf",
-            "pages": page_count,
-            "text_pages": text_pages,
-            "truncated": len(text) >= limit,
-        }
-
-        # PDF sem texto: entregue um pequeno lote de páginas ao modelo de visão.
-        if text_pages == 0:
-            images = []
-            page_limit = min(page_count, 6)
-            for idx in range(page_limit):
-                pix = doc[idx].get_pixmap(matrix=pymupdf.Matrix(1.15, 1.15), alpha=False)
-                jpeg = pix.tobytes("jpeg", jpg_quality=65)
-                images.append({
-                    "page": idx + 1,
-                    "media_type": "image/jpeg",
-                    "data": base64.b64encode(jpeg).decode("ascii"),
-                })
-            result["images"] = images
-            result["vision_pages"] = page_limit
-            result["message"] = (
-                f"PDF sem camada de texto. Foram preparadas {page_limit} de {page_count} "
-                "páginas como imagens para leitura por visão."
-            )
-        return result
-
-
 def read_file(path: str, max_chars: int | None = None) -> dict:
-    """Lê arquivos locais de texto e PDFs.
+    """Lê um arquivo de texto autorizado, com limite de tamanho.
 
-    PDFs com texto são extraídos. PDFs sem camada de texto são preparados em
-    poucas páginas como imagens para modelos multimodais. Arquivos binários
-    que não possuem leitor específico continuam sendo rejeitados.
+    O limite evita despejar arquivos gigantes no contexto do modelo. Arquivos
+    binários não são lidos por esta ferramenta.
     """
     target = _resolve_allowed(path)
     if not target.exists():
@@ -233,19 +172,14 @@ def read_file(path: str, max_chars: int | None = None) -> dict:
     configured_max, _, _ = _config_limits()
     requested_limit = int(max_chars) if max_chars is not None else configured_max
     limit = min(configured_max, max(1, requested_limit))
-
-    if target.suffix.lower() == ".pdf":
-        return _read_pdf(target, limit)
-
+    # Evita carregar arquivos gigantes na memória: ainda podemos ler até o
+    # limite configurado + uma pequena margem para detectar truncamento.
     max_bytes = max(limit * 4, 64 * 1024)
     with target.open("rb") as f:
         data = f.read(max_bytes + 1)
 
     if not _is_probably_text(data[: min(len(data), 64 * 1024)]):
-        raise ValueError(
-            "O arquivo é binário e este formato ainda não possui leitor específico. "
-            "Para editar/ler, use um formato textual suportado ou adicione um leitor do formato."
-        )
+        raise ValueError("O arquivo parece ser binário; read_file lê apenas texto.")
 
     text = data.decode("utf-8", errors="replace")
     truncated = len(text) > limit or len(data) > max_bytes
@@ -256,9 +190,38 @@ def read_file(path: str, max_chars: int | None = None) -> dict:
         "path": _display_path(target),
         "content": text,
         "size_bytes": target.stat().st_size,
-        "file_type": "text",
         "truncated": truncated,
         "max_chars": limit,
+    }
+
+
+def read_file_range(path: str, start_line: int, end_line: int) -> dict:
+    """Lê só um trecho (por número de linha) de um arquivo de texto —
+    evita carregar o arquivo inteiro quando só uma parte importa.
+    Linhas contadas a partir de 1, inclusive nas duas pontas."""
+    target = _resolve_allowed(path)
+    if not target.exists():
+        raise FileNotFoundError(f"Arquivo não encontrado: {path}")
+    if not target.is_file():
+        raise IsADirectoryError(f"Não é um arquivo: {path}")
+    if start_line < 1 or end_line < start_line:
+        raise ValueError("Intervalo de linhas inválido.")
+
+    with target.open("rb") as f:
+        head = f.read(64 * 1024)
+    if not _is_probably_text(head):
+        raise ValueError("O arquivo parece ser binário; read_file_range lê apenas texto.")
+
+    lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    total = len(lines)
+    selected = lines[start_line - 1 : end_line]
+
+    return {
+        "path": _display_path(target),
+        "content": "\n".join(selected),
+        "start_line": start_line,
+        "end_line": min(end_line, total),
+        "total_lines": total,
     }
 
 

@@ -1,6 +1,6 @@
 """Provider Anthropic. Opcional: o DOK não depende dele para usar OpenRouter."""
 import requests
-from .base import Provider, ProviderError
+from .base import Provider, ProviderError, normalize_content
 
 URL = "https://api.anthropic.com/v1/messages"
 class AnthropicProvider(Provider):
@@ -25,7 +25,7 @@ class AnthropicProvider(Provider):
             elif role == "tool":
                 anthropic_messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": m.get("tool_call_id"), "content": m.get("content", "")} ]})
             else:
-                anthropic_messages.append({"role": role, "content": m.get("content", "")})
+                anthropic_messages.append({"role": role, "content": normalize_content(m.get("content", ""), "anthropic")})
 
         payload = {"model": model, "max_tokens": max_tokens, "system": system_prompt, "messages": anthropic_messages}
         if tools:

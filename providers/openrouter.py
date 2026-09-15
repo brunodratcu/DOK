@@ -1,7 +1,7 @@
 """Provider OpenRouter usando a API compatível com OpenAI."""
 import os
 import requests
-from .base import Provider, ProviderError
+from .base import Provider, ProviderError, normalize_content
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS_URL = "https://openrouter.ai/api/v1/models"
@@ -18,10 +18,14 @@ class OpenRouterProvider(Provider):
     def chat(self, *, model, system_prompt, messages, tools=None, max_tokens=800, tool_choice="auto"):
         if not self.api_key:
             raise ProviderError("Chave da OpenRouter não configurada. Rode: ./dok key openrouter set")
+        normalized_messages = [
+            {**m, "content": normalize_content(m.get("content"), "openai")}
+            for m in messages
+        ]
         payload = {
             "model": model,
             "max_tokens": max_tokens,
-            "messages": [{"role": "system", "content": system_prompt}] + messages,
+            "messages": [{"role": "system", "content": system_prompt}] + normalized_messages,
         }
         if tools:
             payload["tools"] = tools

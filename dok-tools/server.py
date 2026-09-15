@@ -17,10 +17,13 @@ from tools.network import check_network
 from tools.website import check_website
 from tools.device import check_device_mac
 from tools.domain import whois_domain
-from tools.oracle import oracle_ingest, oracle_query, oracle_status, oracle_register_chapter
+from tools.oracle import oracle_ingest, oracle_query, oracle_status
+from tools.vision import describe_image
+from tools.pdf import read_pdf_text
 from tools.filesystem import (
     list_directory as fs_list_directory,
     read_file as fs_read_file,
+    read_file_range as fs_read_file_range,
     search_files as fs_search_files,
     file_info as fs_file_info,
     write_file as fs_write_file,
@@ -61,31 +64,24 @@ def whois_domain_tool(domain: str) -> dict:
 
 
 @mcp.tool()
-def oracle_ingest_tool(folder_path: str) -> dict:
-    """Processa uma pasta com PDFs de mangá organizados por obra
-    (subpasta) e capítulo (nome do arquivo). Interpreta cada capítulo
-    novo via IA de visão e atualiza o resumo geral de cada obra.
-    Pode demorar — processa vários capítulos, um de cada vez, e salva
-    o progresso a cada um (não perde trabalho se for interrompido)."""
-    return oracle_ingest(folder_path)
-
-
-@mcp.tool()
-def oracle_register_chapter_tool(file_path: str) -> dict:
-    """Registra um único capítulo PDF na memória narrativa do DOK.
-    O DOK abre o arquivo local, lê todas as páginas em pequenos lotes,
-    consolida o capítulo e atualiza três Markdown persistentes: leitura
-    das páginas, registros dos capítulos e memória cumulativa da obra.
-    O nome da obra é inferido somente do nome do arquivo depois da leitura.
-    """
-    return oracle_register_chapter(file_path)
+def oracle_ingest_tool(folder_path: str, block_size: int = 4) -> dict:
+    """Processa uma pasta com PDFs de mangá/HQ — não precisa organizar
+    em subpastas por obra, o nome da obra é inferido do nome de cada
+    arquivo (ex: 'Two Blue Vortex Chapter 001.pdf'). Cada capítulo é
+    lido em blocos pequenos de páginas (block_size, padrão 4) pra
+    controlar memória e custo, depois consolidado. Salva progresso a
+    cada capítulo — não perde trabalho se for interrompido. Detecta
+    sozinho se o PDF é texto (resume direto) ou visual (usa IA de
+    visão)."""
+    return oracle_ingest(folder_path, block_size=block_size)
 
 
 @mcp.tool()
 def oracle_query_tool(work: str = None) -> dict:
-    """Consulta o conhecimento já processado do Oráculo. Sem 'work',
-    devolve todas as obras. Com 'work' (ex: 'nng', 'tbv', 'ds'),
-    devolve o resumo geral daquela obra e os capítulos já processados."""
+    """Consulta a memória já processada do Oráculo, sem reprocessar
+    nenhum PDF. Sem 'work', devolve a memória de todas as obras. Com
+    'work' (o nome inferido da obra), devolve só a memória cumulativa
+    dela (personagens, linha do tempo, estado atual da história)."""
     return oracle_query(work)
 
 
@@ -106,6 +102,12 @@ def list_directory(path: str = ".") -> dict:
 def read_file(path: str, max_chars: int = None) -> dict:
     """Lê o conteúdo de um arquivo de texto autorizado na máquina local. Arquivos binários não são lidos."""
     return fs_read_file(path, max_chars=max_chars)
+
+
+@mcp.tool()
+def read_file_range(path: str, start_line: int, end_line: int) -> dict:
+    """Lê só um trecho de um arquivo de texto (por número de linha, inclusive nas duas pontas) — use quando só uma parte do arquivo importa, evita gastar contexto com o resto."""
+    return fs_read_file_range(path, start_line, end_line)
 
 
 @mcp.tool()
@@ -132,5 +134,22 @@ def edit_file(path: str, old_text: str, new_text: str) -> dict:
     return fs_edit_file(path, old_text, new_text)
 
 
+@mcp.tool()
+def describe_image_tool(path: str, question: str = None) -> dict:
+    """Descreve o conteúdo visual de uma foto/imagem autorizada (jpg, png, gif, webp) via IA de visão. Use 'question' pra focar a análise em algo específico."""
+    return describe_image(path, question=question)
+
+
+@mcp.tool()
+def read_pdf_text_tool(path: str, max_pages: int = 100) -> dict:
+    """Lê o TEXTO de um PDF normal (curso, artigo, contrato, relatório) — extração direta, sem IA de visão, rápida e barata. Se o PDF for majoritariamente imagem (ex: mangá/HQ digitalizada), o resultado avisa isso — use oracle_ingest_tool nesse caso em vez desta."""
+    return read_pdf_text(path, max_pages=max_pages)
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # show_banner=False é essencial: sem isso, o banner do FastMCP pode
+    # vazar pro stdout (bug conhecido, mais comum no Windows com
+    # localidade não-inglesa) e corromper o protocolo JSON-RPC que
+    # roda sobre esse mesmo canal — causa direta de "Connection closed"
+    # de forma consistente, não ocasional.
+    mcp.run(transport="stdio", show_banner=False)

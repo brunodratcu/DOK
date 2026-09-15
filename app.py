@@ -15,7 +15,6 @@ import chat_store
 import paths
 from agents import agent_loop
 import usage_store
-from attachments import read_attachment
 
 CONFIG_PATH = paths.data_path("config", "config.yaml")
 
@@ -192,65 +191,14 @@ def api_send_message(chat_id):
     history_raw = chat["messages"][-history_limit:]
     history = [{"role": m["role"], "content": m["content"]} for m in history_raw]
     provider = create_provider(cfg)
-
-    # Anexos são abertos PELO DOK local antes de chegar ao modelo.
-    # O caminho é apenas uma referência; nunca é tratado como se o modelo
-    # tivesse acesso ao filesystem do computador do usuário.
-    attachment_images = []
-    attachment_notes = []
-    for line in user_text.splitlines():
-        if line.startswith("[Arquivo anexado] "):
-            attachment_path = line[len("[Arquivo anexado] "):].strip()
-        elif line.startswith("[Pasta anexada] "):
-            # Pasta continua sendo uma referência para as ferramentas.
-            continue
-        else:
-            continue
-        try:
-            attachment = read_attachment(attachment_path)
-            if attachment["kind"] == "text":
-                attachment_notes.append(
-                    f"CONTEÚDO DO ARQUIVO LOCAL ({attachment['path']}):\n"
-                    f"{attachment['text']}"
-                )
-            elif attachment["kind"] == "pdf":
-                if attachment["text_available"]:
-                    attachment_notes.append(
-                        f"CONTEÚDO EXTRAÍDO DO PDF LOCAL ({attachment['path']}, "
-                        f"{attachment['page_count']} páginas):\n{attachment['text']}"
-                    )
-                else:
-                    attachment_notes.append(
-                        f"PDF LOCAL ({attachment['path']}) possui "
-                        f"{attachment['page_count']} páginas e não tem camada de texto. "
-                        "As páginas foram anexadas como imagens para leitura visual."
-                    )
-                    attachment_images.extend(attachment["images"])
-            else:
-                attachment_notes.append(attachment.get("message", "Não foi possível ler o anexo."))
-        except Exception as exc:
-            attachment_notes.append(
-                f"ERRO AO ABRIR ANEXO LOCAL ({attachment_path}): {exc}"
-            )
-
-    model_user_content = user_text
-    if attachment_notes:
-        model_user_content += "\n\n" + "\n\n".join(attachment_notes)
-    if attachment_images:
-        content = [{"type": "text", "text": model_user_content}]
-        content.extend(
-            {"type": "image_url", "image_url": {"url": item["data_url"]}}
-            for item in attachment_images
-        )
-        model_user_content = content
-
     manager = SubAgentManager(provider, tools_server_path, tools_python_cmd, max_turns=4)
 
-    def delegate(task, role):
-        sub_ok, sub_reply, sub_trace, _sub_usage = manager.run(
+    async def delegate(task, role):
+        sub_ok, sub_reply, sub_trace, _sub_usage = await manager.run_async(
             task, role, model=provider_cfg.get("model"),
             system_prompt=cfg["personality"]["system_prompt"],
             max_tokens=provider_cfg.get("max_tokens", 700),
+            permissions_cfg=cfg,
         )
         return sub_reply if sub_ok else f"Sub-agent falhou: {sub_reply}"
 
@@ -259,7 +207,7 @@ def api_send_message(chat_id):
         model=provider_cfg.get("model"),
         system_prompt=cfg["personality"]["system_prompt"],
         history=history,
-        user_text=model_user_content,
+        user_text=user_text,
         tools_server_path=tools_server_path,
         tools_python_cmd=tools_python_cmd,
         max_tokens=provider_cfg.get("max_tokens", 800),

@@ -1,0 +1,8 @@
+filesystem:
+  allowed_paths:
+    - "/tmp/pasta_teste"
+  max_read_chars: 40000
+  max_results: 200
+  max_search_file_bytes: 5242880
+permissions:
+  deny: []

@@ -1,315 +1,299 @@
-"""Memória narrativa do DOK baseada em três Markdown por obra.
-
-Etapas:
-1. pages.md    -> leitura detalhada das páginas, em ordem.
-2. chapter.md  -> registro consolidado de cada capítulo.
-3. work.md     -> memória cumulativa da obra.
-
-Não há banco de dados nem JSON de conhecimento. Os Markdown são a fonte
-persistente e legível da memória. A obra só é definida depois que o capítulo
-foi completamente interpretado, usando o nome do arquivo como identificador.
 """
-from __future__ import annotations
+oracle.py — o Oráculo: lê PDFs de manga (ou qualquer HQ/documento
+visual), interpreta em BLOCOS pequenos de páginas (controla memória e
+tamanho de chamada), e mantém memória por obra em markdown:
 
-import base64
+    data/oracle/<Nome da Obra>/
+        chapters.md   — histórico completo, um capítulo é anexado por vez
+        work.md       — memória cumulativa (personagens, linha do tempo, etc.)
+
+O nome da obra é INFERIDO do nome do arquivo — não precisa organizar
+em pastas por obra. Processamento pesado sempre na nuvem (API);
+localmente só abre página por bloco, nunca o PDF inteiro de uma vez —
+pensado pra caber na memória de um Raspberry Pi.
+
+Todas as chamadas de IA passam pelo providers.py deste projeto (não
+reimplementa HTTP aqui) — troca de modelo/provedor sem duplicar código.
+"""
 import os
 import re
-from pathlib import Path
 
-import pymupdf
-import requests
 import yaml
+import pymupdf
+import base64
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = BASE_DIR / "config" / "config.yaml"
-DEFAULT_MEMORY_ROOT = BASE_DIR / "data" / "oracle"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
-CHAPTER_NUM_RE = re.compile(r"(?i)(?:chapter|cap(?:itulo)?|cap)?[^0-9]{0,8}(\d+)")
+from providers import create_provider
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "config.yaml")
+ORACLE_ROOT = os.path.join(BASE_DIR, "..", "data", "oracle")
 
-def _load_config() -> dict:
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+DEFAULT_BLOCK_SIZE = 4
+TEXT_PDF_MIN_CHARS_PAGE = 200
+UNCLASSIFIED_WORK = "obra-nao-classificada"
 
+# --- Inferência de obra/capítulo pelo nome do arquivo (sem hardcode) ---
 
-def _provider_config(cfg):
-    provider = cfg.get("provider", "openrouter")
-    section = cfg.get(provider, {}) or {}
-    api_key = section.get("api_key") or os.getenv("OPENROUTER_API_KEY" if provider == "openrouter" else "ANTHROPIC_API_KEY", "")
-    return provider, api_key, section.get("model", "")
-
-
-def _memory_root() -> Path:
-    cfg = _load_config().get("oracle", {})
-    raw = cfg.get("memory_path")
-    if raw:
-        path = Path(os.path.expandvars(os.path.expanduser(str(raw))))
-        if not path.is_absolute():
-            path = BASE_DIR / path
-        return path.resolve()
-    return DEFAULT_MEMORY_ROOT
+_CHAPTER_MARKER_RE = re.compile(
+    r"(?i)^(?P<work>.*?)[\s_\-]*(?:chapter|cap[ií]tulo|cap\.?|ch\.?)[\s_\-]*(?P<num>\d+)"
+)
+_TRAILING_NUM_RE = re.compile(r"^(?P<work>.*?)[\s_\-]+(?P<num>\d+)$")
 
 
-def _safe_name(name: str) -> str:
-    name = re.sub(r"[^\w\- .]+", "", name, flags=re.UNICODE).strip(" .")
-    name = re.sub(r"\s+", " ", name)
-    return name or "obra-nao-classificada"
+def _infer_work_and_chapter(filename: str):
+    stem = os.path.splitext(filename)[0]
+    m = _CHAPTER_MARKER_RE.match(stem)
+    if m:
+        work = m.group("work").strip(" _-.")
+        return (work or UNCLASSIFIED_WORK), int(m.group("num"))
+    m = _TRAILING_NUM_RE.match(stem)
+    if m:
+        work = m.group("work").strip(" _-.")
+        return (work or UNCLASSIFIED_WORK), int(m.group("num"))
+    return UNCLASSIFIED_WORK, None
 
 
-def _infer_work_name(filename: str) -> str:
-    """Extrai o nome da obra do nome do documento, sem mapa de obras.
-
-    Exemplos:
-      Two Blue Vortex Chapter 001.pdf -> Two Blue Vortex
-      naruto_next_generation_12.pdf    -> naruto next generation
-      Chapter_001.pdf                  -> obra-nao-classificada
-    """
-    stem = Path(filename).stem
-    stem = re.sub(r"(?i)[._\- ]*(?:chapter|cap(?:itulo)?)[._\- ]*\d+.*$", "", stem)
-    stem = re.sub(r"(?i)[._\- ]+\d{1,4}$", "", stem)
-    stem = re.sub(r"[_\-.]+", " ", stem)
-    stem = re.sub(r"\s+", " ", stem).strip(" -._")
-    if not stem or stem.lower() in {"chapter", "cap", "capitulo", "manga"}:
-        return "obra-nao-classificada"
-    return stem
+def _safe_dirname(work: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]', "_", work).strip() or UNCLASSIFIED_WORK
 
 
-def _chapter_number(filename: str) -> int | None:
-    matches = list(re.finditer(r"\d+", Path(filename).stem))
-    if not matches:
-        return None
-    # O último número é normalmente o número do capítulo.
-    return int(matches[-1].group())
+def _work_dir(work: str) -> str:
+    path = os.path.join(ORACLE_ROOT, _safe_dirname(work))
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
-def _work_dir(work: str) -> Path:
-    return _memory_root() / _safe_name(work)
+def _chapters_md_path(work: str) -> str:
+    return os.path.join(_work_dir(work), "chapters.md")
 
 
-def _paths(work: str):
-    root = _work_dir(work)
-    return root / "pages.md", root / "chapters.md", root / "work.md"
+def _work_md_path(work: str) -> str:
+    return os.path.join(_work_dir(work), "work.md")
 
 
-def _append(path: Path, text: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(text.rstrip() + "\n\n")
+# --- Config ---
+
+def _load_config():
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
-def _read(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
+# --- Descoberta de PDFs (recursiva, sem exigir pasta por obra) ---
+
+def discover_pdfs(folder_path: str):
+    found = []
+    folder_path = os.path.abspath(folder_path)
+    for root, _, files in os.walk(folder_path):
+        for fname in sorted(files):
+            if not fname.lower().endswith(".pdf"):
+                continue
+            work, chapter = _infer_work_and_chapter(fname)
+            found.append({
+                "work": work, "chapter": chapter,
+                "path": os.path.join(root, fname), "filename": fname,
+            })
+    return found
 
 
-def _pdf_page_images(pdf_path: str, start: int, end: int, zoom: float = 1.35):
-    images = []
-    doc = pymupdf.open(pdf_path)
+# --- PDF: texto ou visual? ---
+
+def _is_text_pdf(path, sample_pages=3, min_chars_per_page=TEXT_PDF_MIN_CHARS_PAGE):
+    doc = pymupdf.open(path)
     try:
-        end = min(end, len(doc))
-        for index in range(start, end):
-            page = doc.load_page(index)
-            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
-            images.append((index + 1, base64.b64encode(pix.tobytes("jpeg")).decode("ascii")))
+        n = min(len(doc), sample_pages)
+        total = sum(len(doc.load_page(i).get_text().strip()) for i in range(n))
+        return (total / max(n, 1)) >= min_chars_per_page
     finally:
         doc.close()
+
+
+def _extract_pdf_text(path, max_pages=300):
+    doc = pymupdf.open(path)
+    try:
+        n = min(len(doc), max_pages)
+        return "\n\n".join(doc.load_page(i).get_text() for i in range(n)).strip()
+    finally:
+        doc.close()
+
+
+def _render_block(doc, start, end, zoom=1.5):
+    """Renderiza só um bloco de páginas por vez — nunca o PDF inteiro
+    na memória de uma vez."""
+    images = []
+    for i in range(start, end):
+        pix = doc.load_page(i).get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+        images.append(base64.b64encode(pix.tobytes("jpeg")).decode("ascii"))
     return images
 
 
-def _call_openrouter(api_key, model, system_prompt, content, max_tokens=1800):
-    if not api_key:
-        raise ValueError("Chave da OpenRouter não configurada.")
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ],
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/brunodratcu/dok",
-        "X-Title": "DOK",
-    }
-    r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
-    data = r.json()
-    if r.status_code != 200:
-        raise RuntimeError(data.get("error", {}).get("message", r.text))
-    return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "").strip()
+# --- Pipeline de um capítulo: blocos -> consolidação (via Provider) ---
 
-
-def _call_anthropic(api_key, model, system_prompt, content, max_tokens=1800):
-    if not api_key:
-        raise ValueError("Chave da Anthropic não configurada.")
-    headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
-    payload = {"model": model, "max_tokens": max_tokens, "system": system_prompt, "messages": [{"role": "user", "content": content}]}
-    r = requests.post(ANTHROPIC_URL, headers=headers, json=payload, timeout=180)
-    data = r.json()
-    if r.status_code != 200:
-        raise RuntimeError(data.get("error", {}).get("message", r.text))
-    return "\n".join(x.get("text", "") for x in data.get("content", []) if x.get("type") == "text").strip()
-
-
-def _call_ai(provider, api_key, model, system_prompt, content, max_tokens=1800):
-    if provider == "openrouter":
-        return _call_openrouter(api_key, model, system_prompt, content, max_tokens)
-    return _call_anthropic(api_key, model, system_prompt, content, max_tokens)
-
-
-def _vision_content(pages):
-    blocks = [{"type": "text", "text": "Analise todas as páginas abaixo na ordem. Descreva fatos visíveis, diálogos legíveis, ações, personagens, cenário, continuidade e informações narrativas. NÃO resuma pulando páginas. Se algo não puder ser lido, marque como [ilegível]. Separe claramente cada página."}]
-    for page_num, b64 in pages:
-        blocks.append({"type": "text", "text": f"\n--- PÁGINA {page_num} ---"})
-        blocks.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-    return blocks
-
-
-def _analyze_pages(pdf_path, start, end, provider, api_key, model):
-    pages = _pdf_page_images(pdf_path, start, end)
-    return _call_ai(
-        provider, api_key, model,
-        "Você é um leitor de mangá extremamente cuidadoso. Sua prioridade é cobertura completa das páginas e fidelidade ao que está visível.",
-        _vision_content(pages),
-        max_tokens=2200,
+def _analyze_block(images_b64, work, chapter, block_index, total_blocks, provider, model):
+    content = [{"type": "text", "text": (
+        f"Bloco {block_index + 1} de {total_blocks} do capítulo {chapter} da obra "
+        f"'{work}'. Descreva em detalhe o que acontece nestas páginas específicas: "
+        "eventos, personagens presentes, diálogos importantes. Não resuma a obra "
+        "inteira, só o que está visível aqui. Não invente nada."
+    )}]
+    for img in images_b64:
+        content.append({"type": "image_b64", "media_type": "image/jpeg", "data": img})
+    return provider.chat(
+        model=model,
+        system_prompt="Você descreve com precisão o conteúdo visual de páginas de mangá, sem inventar nada.",
+        content=content, max_tokens=1000,
     )
 
 
-def _chapter_consolidation(page_notes: str, filename: str, chapter_num: int | None, provider, api_key, model):
+def _consolidate_chapter(block_texts, work, chapter, provider, model):
+    joined = "\n\n---\n\n".join(f"Bloco {i + 1}:\n{t}" for i, t in enumerate(block_texts))
     prompt = (
-        f"Documento: {filename}\nCapítulo: {chapter_num or 'não identificado'}\n\n"
-        "Registros detalhados das páginas:\n" + page_notes + "\n\n"
-        "Transforme isso em um REGISTRO COMPLETO DO CAPÍTULO. Preserve a ordem dos acontecimentos, "
-        "não omita acontecimentos relevantes, identifique personagens e relações somente quando sustentados "
-        "pelas páginas, registre revelações, conflitos, mudanças de cenário e falas importantes. "
-        "Não invente. Não faça um resumo de duas linhas: este documento será a fonte para a memória futura. "
-        "Use Markdown com os títulos: Resumo detalhado, Personagens, Acontecimentos, Revelações, Pendências e Observações."
+        f"Descrições dos blocos de páginas do capítulo {chapter} da obra '{work}', em ordem:\n\n"
+        f"{joined}\n\n"
+        "Consolide num resumo único e coerente do capítulo, em markdown:\n"
+        "**Resumo:** (parágrafo detalhado)\n**Personagens:** (lista)\n"
+        "**Eventos-chave:** (lista)\n**Falas marcantes:** (lista, se houver)\n"
+        "Não invente nada além do que está nos blocos acima."
     )
-    return _call_ai(
-        provider, api_key, model,
-        "Você consolida a leitura de um capítulo de mangá sem perder informação narrativa.",
-        prompt,
-        max_tokens=2800,
+    return provider.chat(
+        model=model,
+        system_prompt="Você consolida análises de mangá num resumo de capítulo coerente e fiel.",
+        content=[{"type": "text", "text": prompt}], max_tokens=1500,
     )
 
 
-def _update_work_memory(existing: str, chapter_record: str, work: str, chapter_num: int | None, provider, api_key, model):
+def _summarize_text_chapter(text, work, chapter, provider, model):
     prompt = (
-        f"MEMÓRIA ATUAL DA OBRA '{work}':\n{existing or '(primeiro capítulo)'}\n\n"
-        f"NOVO REGISTRO — CAPÍTULO {chapter_num or '?'}:\n{chapter_record}\n\n"
-        "Atualize a memória cumulativa da obra. Não apague fatos anteriores só porque o novo capítulo não os menciona. "
-        "Incorpore somente fatos sustentados pelos registros. Preserve nomes, acontecimentos, relações, mistérios, "
-        "estado atual dos personagens e continuidade. Não invente e não transforme hipótese em fato. "
-        "Escreva em Markdown, de forma compacta mas suficientemente detalhada para responder futuramente a perguntas sobre a obra."
+        f"Resuma o capítulo {chapter} da obra '{work}' a partir deste texto, em markdown:\n"
+        "**Resumo:** (parágrafo)\n**Personagens:** (lista)\n**Eventos-chave:** (lista)\n\n"
+        f"Texto:\n{text[:20000]}"
     )
-    return _call_ai(
-        provider, api_key, model,
-        "Você mantém a memória cumulativa e fiel de uma obra de mangá, capítulo após capítulo.",
-        prompt,
-        max_tokens=3200,
+    return provider.chat(
+        model=model,
+        system_prompt="Você resume capítulos de texto com precisão, sem inventar.",
+        content=[{"type": "text", "text": prompt}], max_tokens=1500,
     )
 
 
-def oracle_register_chapter(file_path: str) -> dict:
-    """Registra um único capítulo. O arquivo local é aberto pelo DOK.
+# --- Memória persistente (chapters.md + work.md) ---
 
-    São gerados/atualizados exatamente três Markdown: pages.md, chapters.md e work.md.
-    """
-    target = Path(os.path.abspath(os.path.expanduser(file_path)))
-    if not target.exists() or not target.is_file():
-        return {"ok": False, "error": f"Arquivo não encontrado: {file_path}"}
-    if target.suffix.lower() != ".pdf":
-        return {"ok": False, "error": "O registro de capítulo atualmente espera um PDF."}
+def _chapter_already_processed(work, chapter):
+    path = _chapters_md_path(work)
+    if not os.path.exists(path):
+        return False
+    with open(path, "r", encoding="utf-8") as f:
+        return f"## Capítulo {chapter}\n" in f.read()
 
+
+def _append_chapter(work, chapter, consolidated_md):
+    path = _chapters_md_path(work)
+    is_new = not os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if is_new:
+            f.write(f"# {work}\n\n")
+        f.write(f"## Capítulo {chapter}\n\n{consolidated_md}\n\n")
+
+
+def _update_work_memory(work, latest_chapter_md, provider, model):
+    path = _work_md_path(work)
+    existing = ""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            existing = f.read()
+    prompt = (
+        f"Memória cumulativa atual da obra '{work}':\n"
+        f"{existing or '(vazia — este é o primeiro capítulo)'}\n\n"
+        f"Capítulo recém-processado:\n{latest_chapter_md}\n\n"
+        "Atualize a memória cumulativa incorporando esse capítulo, em markdown com "
+        "seções: Personagens, Relações, Linha do Tempo, Conflitos, Revelações e "
+        "Mistérios, Estado Atual da História. Preserve o conhecimento anterior; "
+        "só adicione o que está sustentado pelos capítulos."
+    )
+    new_content = provider.chat(
+        model=model,
+        system_prompt="Você mantém a memória cumulativa e fiel de uma obra de mangá.",
+        content=[{"type": "text", "text": prompt}], max_tokens=2000,
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# {work} — Memória\n\n{new_content}")
+    return new_content
+
+
+# --- Orquestração ---
+
+def oracle_ingest(folder_path: str, block_size: int = DEFAULT_BLOCK_SIZE):
     cfg = _load_config()
-    provider, api_key, model = _provider_config(cfg)
-    work = _infer_work_name(target.name)
-    chapter_num = _chapter_number(target.name)
-    pages_path, chapters_path, work_path = _paths(work)
-    existing_chapters = _read(chapters_path)
-    marker = f"## Capítulo {chapter_num}" if chapter_num is not None else f"## {target.name}"
-    if marker in existing_chapters:
-        return {"ok": True, "skipped": True, "work": work, "chapter": chapter_num, "message": "Este capítulo já está registrado."}
+    provider, model = create_provider(cfg)
+    if not provider.api_key:
+        return {"ok": False, "error": f"Chave da {provider.name} não configurada em dok-tools/config/config.yaml"}
 
-    oracle_cfg = cfg.get("oracle", {}) or {}
-    batch_size = max(1, int(oracle_cfg.get("pages_per_batch", 4)))
-    zoom = float(oracle_cfg.get("render_zoom", 1.35))
-    # Passa o zoom pela função sem manter imagens na memória entre lotes.
-    doc = pymupdf.open(str(target))
-    total_pages = len(doc)
-    doc.close()
+    report = {"ok": True, "provider": provider.name, "chapters_added": [], "chapters_skipped": [], "errors": []}
 
-    page_notes_parts = []
-    for start in range(0, total_pages, batch_size):
-        end = min(start + batch_size, total_pages)
-        pages = _pdf_page_images(str(target), start, end, zoom=zoom)
-        notes = _call_ai(
-            provider, api_key, model,
-            "Você é um leitor de mangá extremamente cuidadoso. Cubra TODAS as páginas recebidas, na ordem. Não pule páginas. Diferencie texto legível de interpretação visual e marque incertezas.",
-            _vision_content(pages),
-            max_tokens=2200,
-        )
-        block = f"### Páginas {start + 1}–{end}\n\n{notes}"
-        page_notes_parts.append(block)
-        _append(pages_path, f"# Leitura do capítulo {chapter_num or target.name}\n\n**Arquivo:** `{target.name}`\n\n{block}")
+    for item in discover_pdfs(folder_path):
+        work, chapter = item["work"], item["chapter"]
+        if chapter is None:
+            report["errors"].append(f"Não consegui identificar o capítulo de {item['filename']}")
+            continue
+        if _chapter_already_processed(work, chapter):
+            report["chapters_skipped"].append(f"{work} cap {chapter} (já processado)")
+            continue
 
-    page_notes = "\n\n".join(page_notes_parts)
-    chapter_record = _chapter_consolidation(page_notes, target.name, chapter_num, provider, api_key, model)
-    _append(chapters_path, f"{marker} — `{target.name}`\n\n{chapter_record}")
+        try:
+            if _is_text_pdf(item["path"]):
+                text = _extract_pdf_text(item["path"])
+                consolidated = _summarize_text_chapter(text, work, chapter, provider, model)
+            else:
+                doc = pymupdf.open(item["path"])
+                try:
+                    total_pages = len(doc)
+                    total_blocks = max(1, (total_pages + block_size - 1) // block_size)
+                    block_texts = []
+                    for b in range(total_blocks):
+                        start, end = b * block_size, min((b + 1) * block_size, total_pages)
+                        images = _render_block(doc, start, end)
+                        block_texts.append(_analyze_block(
+                            images, work, chapter, b, total_blocks, provider, model
+                        ))
+                        images = None
+                finally:
+                    doc.close()
+                consolidated = _consolidate_chapter(block_texts, work, chapter, provider, model)
 
-    existing_work = _read(work_path)
-    updated_work = _update_work_memory(existing_work, chapter_record, work, chapter_num, provider, api_key, model)
-    work_path.parent.mkdir(parents=True, exist_ok=True)
-    work_path.write_text(f"# Memória da obra: {work}\n\n{updated_work.strip()}\n", encoding="utf-8")
+            _append_chapter(work, chapter, consolidated)
+            _update_work_memory(work, consolidated, provider, model)
+            report["chapters_added"].append(f"{work} cap {chapter}")
+        except Exception as exc:
+            report["errors"].append(f"{work} cap {chapter}: {exc}")
 
-    return {
-        "ok": True,
-        "work": work,
-        "chapter": chapter_num,
-        "pages": total_pages,
-        "files": [str(p) for p in (pages_path, chapters_path, work_path)],
-        "message": f"Capítulo registrado: {work} — capítulo {chapter_num or '?'} ({total_pages} páginas).",
-    }
-
-
-def oracle_ingest(folder_path: str) -> dict:
-    """Mantém compatibilidade: registra todos os PDFs encontrados recursivamente."""
-    root = Path(os.path.abspath(os.path.expanduser(folder_path)))
-    if not root.is_dir():
-        return {"ok": False, "error": f"Pasta não encontrada: {folder_path}"}
-    results = []
-    for pdf in sorted(root.rglob("*.pdf")):
-        results.append(oracle_register_chapter(str(pdf)))
-    return {"ok": all(r.get("ok") for r in results), "chapters": results}
+    return report
 
 
 def oracle_query(work: str = None):
-    root = _memory_root()
+    if not os.path.isdir(ORACLE_ROOT):
+        return {}
     if work:
-        path = _work_dir(work) / "work.md"
-        return {"ok": path.exists(), "work": work, "memory": _read(path)}
-    works = []
-    if root.exists():
-        for p in sorted(root.iterdir()):
-            if p.is_dir() and (p / "work.md").exists():
-                works.append(p.name)
-    return {"ok": True, "works": works}
+        path = _work_md_path(work)
+        if not os.path.exists(path):
+            return {"error": f"Nenhum conhecimento registrado pra '{work}'"}
+        with open(path, "r", encoding="utf-8") as f:
+            return {"work": work, "memory": f.read()}
+    result = {}
+    for name in sorted(os.listdir(ORACLE_ROOT)):
+        path = os.path.join(ORACLE_ROOT, name, "work.md")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                result[name] = f.read()
+    return result
 
 
 def oracle_status():
-    root = _memory_root()
+    if not os.path.isdir(ORACLE_ROOT):
+        return {}
     result = {}
-    if not root.exists():
-        return result
-    for work_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        chapters = _read(work_dir / "chapters.md")
-        result[work_dir.name] = {
-            "has_pages": (work_dir / "pages.md").exists(),
-            "has_chapters": bool(chapters),
-            "has_work_memory": (work_dir / "work.md").exists(),
-        }
+    for name in sorted(os.listdir(ORACLE_ROOT)):
+        chapters_path = os.path.join(ORACLE_ROOT, name, "chapters.md")
+        count = 0
+        if os.path.exists(chapters_path):
+            with open(chapters_path, "r", encoding="utf-8") as f:
+                count = f.read().count("\n## Capítulo")
+        result[name] = {"chapters_ingested": count}
     return result

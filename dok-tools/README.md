@@ -1,13 +1,19 @@
 # dok-tools
 
 Servidor MCP independente do DOK. Ele expõe ferramentas de diagnóstico,
-Oráculo de mangás e, agora, quatro ferramentas locais de filesystem em modo
-**somente leitura**:
+Oráculo de mangás e ferramentas locais de filesystem:
 
 - `list_directory` — lista arquivos e subpastas.
-- `read_file` — lê arquivos de texto.
+- `read_file` — lê arquivos de texto inteiros.
+- `read_file_range` — lê só um trecho (por linha) de um arquivo grande.
 - `search_files` — procura arquivos por nome (`pattern`) e/ou texto (`query`).
 - `file_info` — retorna metadados de arquivo ou diretório.
+- `write_file` — cria/sobrescreve um arquivo (bloqueada por padrão).
+- `edit_file` — substitui um trecho exato de um arquivo (bloqueada por padrão).
+
+As duas últimas (`write_file`, `edit_file`) vêm desativadas por padrão em
+`dok/config/config.yaml` → `permissions.deny`. Remova da lista quando
+quiser ativar escrita de verdade.
 
 ## Filesystem local
 
@@ -58,20 +64,68 @@ ou links simbólicos.
 - `list_directory` e `search_files` limitam a quantidade de resultados.
 - Nenhuma das quatro ferramentas altera, cria ou apaga arquivos.
 
-## As outras ferramentas
-
-Diagnóstico:
+## Diagnóstico
 
 - `check_network_tool`
 - `check_website_tool`
 - `check_device_mac_tool`
 - `whois_domain_tool`
 
-Oráculo:
+## PDF com texto — leitura direta, sem IA
 
-- `oracle_ingest_tool`
-- `oracle_query_tool`
-- `oracle_status_tool`
+- `read_pdf_text_tool(path, max_pages=100)` — pra PDFs "normais"
+  (curso, artigo, contrato, relatório) que têm texto de verdade
+  embutido. Extração direta via PyMuPDF, **sem gastar chamada de
+  IA** — mais rápido e mais barato que o Oráculo, que é pra
+  mangá/HQ (imagem, sem texto extraível). Se o PDF acabar sendo
+  majoritariamente imagem, o resultado avisa e sugere usar
+  `oracle_ingest_tool` no lugar.
+
+## Visão — descrever fotos
+
+- `describe_image_tool(path, question=None)` — jpg, png, gif, webp.
+  Usa o mesmo `providers.py` do Oráculo (troca de provedor sem
+  duplicar código). `question` opcional foca a análise ("tem gente
+  nesta foto?"); sem isso, descrição geral.
+
+## Oráculo — leitura de mangá em blocos, memória por obra
+
+- `oracle_ingest_tool(folder_path, block_size=4)`
+- `oracle_query_tool(work=None)`
+- `oracle_status_tool()`
+
+**Não precisa mais organizar por pasta.** Jogue os PDFs numa pasta só —
+o nome da obra é **inferido do nome do arquivo**:
+
+```text
+"Two Blue Vortex Chapter 001.pdf"  -> obra: Two Blue Vortex, capítulo: 1
+"Naruto Next Generation_12.pdf"    -> obra: Naruto Next Generation, capítulo: 12
+"Chapter_001.pdf"                  -> obra: obra-nao-classificada, capítulo: 1
+```
+
+**Leitura em blocos:** cada capítulo é processado em blocos pequenos de
+páginas (`block_size`, padrão 4), não o PDF inteiro numa chamada só —
+controla memória (importante no Pi) e reduz o custo de qualquer chamada
+individual. Os textos de cada bloco são transitórios: usados só pra
+consolidar o capítulo, depois descartados.
+
+**Detecção automática de tipo:** se o PDF tiver texto extraível (não é
+o caso normal de mangá, mas pode ser de um capítulo com script/roteiro),
+o Oráculo resume direto do texto, sem gastar chamada de visão.
+
+**Memória, por obra, em markdown** (não é mais um JSON único):
+
+```text
+data/oracle/
+    Two Blue Vortex/
+        chapters.md   # histórico completo — cada capítulo é anexado aqui
+        work.md        # memória cumulativa: personagens, linha do tempo,
+                          conflitos, revelações, estado atual
+```
+
+`oracle_query_tool` só lê o `work.md` já pronto — nunca reprocessa PDF.
+Capítulo já processado (confirmado pelo cabeçalho em `chapters.md`) é
+pulado automaticamente, sem gastar chamada de IA de novo.
 
 ## Teste
 
@@ -107,16 +161,22 @@ No DOK, nenhuma alteração no cliente MCP é necessária: o cliente já chama
 ```text
 dok-tools/
 ├── server.py
+├── providers.py          # abstração de IA própria (Anthropic/OpenRouter) — usada pelo Oráculo e Visão
 ├── requirements.txt
 ├── config/
 │   └── config.yaml
 ├── data/
 │   └── oracle/
+│       └── <Nome da Obra>/
+│           ├── chapters.md
+│           └── work.md
 └── tools/
     ├── device.py
     ├── domain.py
     ├── filesystem.py
     ├── network.py
     ├── oracle.py
+    ├── pdf.py
+    ├── vision.py
     └── website.py
 ```
