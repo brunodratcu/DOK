@@ -1,4 +1,5 @@
 config/config.yaml
+dok-tools/config/config.yaml
 data/*.json
 data/*.db
 *.zip
