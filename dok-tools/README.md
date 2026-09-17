@@ -94,6 +94,35 @@ ou links simbólicos.
 - `oracle_query_tool(work=None)`
 - `oracle_status_tool()`
 
+### Confiabilidade
+
+Antes, uma resposta vazia da IA era aceita como válida — o capítulo
+acabava salvo vazio em `chapters.md`/`work.md`. Agora:
+
+```
+resposta vazia -> retry (até 3 tentativas) -> se continuar vazia -> FAILED
+```
+
+Um capítulo que falha **nunca** é salvo — fica de fora do relatório
+em `chapters_failed`, com o motivo formatado como
+`Capítulo X, Bloco Y/Z: <motivo>`, incluindo `finish_reason`, status
+HTTP e uso de tokens da última tentativa (pra diagnosticar de verdade,
+não só saber que falhou).
+
+**Checkpoint por bloco:** se o bloco 5 de 11 falhar (mesmo após retry),
+os blocos 1-4 que já deram certo ficam salvos num arquivo
+`.in_progress.json` dentro da pasta da obra. Rodar `oracle_ingest_tool`
+de novo **retoma do bloco 5**, sem reprocessar os anteriores.
+
+**Hash do arquivo:** um capítulo só é considerado "já processado" se
+o hash do PDF bater com o que foi salvo — se o arquivo mudar (novo
+scan, versão diferente com o mesmo nome), ele é reprocessado
+automaticamente em vez de ser pulado silenciosamente.
+
+**Notas compactas:** cada bloco de páginas gera notas curtas
+(~400-500 tokens), não prosa longa — mais barato e reduz risco de a
+resposta ser cortada no meio.
+
 **Não precisa mais organizar por pasta.** Jogue os PDFs numa pasta só —
 o nome da obra é **inferido do nome do arquivo**:
 

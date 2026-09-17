@@ -58,10 +58,14 @@ def describe_image(path: str, question: str = None) -> dict:
         {"type": "text", "text": prompt},
         {"type": "image_b64", "media_type": media_type, "data": b64},
     ]
-    description = provider.chat(
+    response = provider.chat(
         model=model,
         system_prompt="Você descreve imagens com precisão, sem inventar nada que não esteja visível.",
         content=content, max_tokens=800,
     )
+    if response.get("error"):
+        raise ValueError(f"Falha ao descrever a imagem ({response.get('http_status')}): {response['error']}")
+    if not response.get("text", "").strip():
+        raise ValueError(f"O modelo devolveu resposta vazia (finish_reason: {response.get('finish_reason')}).")
 
-    return {"path": _display_path(target), "description": description}
+    return {"path": _display_path(target), "description": response["text"]}

@@ -1,6 +1,8 @@
 @echo off
-REM build_windows.bat — gera dok.exe. Rode este script DENTRO da pasta
-REM do projeto, no seu notebook Windows (não funciona rodado no Pi).
+REM build_windows.bat — gera dok.exe. Agora mora em packaging/; este
+REM script entra na raiz do projeto sozinho antes de rodar qualquer
+REM coisa, pra funcionar clicando nele direto de dentro de packaging/.
+cd /d "%~dp0\.."
 
 echo === Instalando dependencias ===
 pip install -r requirements.txt

@@ -12,40 +12,48 @@ de microfone/alto-falante.
 
 ```
 dok/
-├── app.py                  # servidor Flask
-├── agents/
-│   ├── agent_loop.py           # loop de decisão-ação pra aba Projetos
-│   └── claude_agent.py           # chamada à Anthropic com tool use
-├── mcp_client/
-│   └── client.py                # conecta no servidor dok-tools
-├── claude_client/
-│   └── client.py                # chamada direta à API de Mensagens da Anthropic
-├── openrouter_client/
-│   └── client.py                # chamada à API da OpenRouter (alternativa gratuita)
-├── chat_store.py                      # múltiplas conversas (JSON único)
-├── chat_store.py              # persistência das conversas (JSON)
-├── paths.py                   # resolve caminhos (funciona empacotado ou não)
+├── app.py                     # servidor Flask
 ├── dok_app.py                  # ponto de entrada do app (janela nativa)
-├── build_windows.bat            # gera dok.exe (rodar no Windows)
-├── build_linux.sh                # gera o binário Linux (rodar no Pi)
-├── dok_cli.py               # firmware CLI (chaves, créditos)
-├── dok                       # atalho pra rodar o CLI (./dok ...)
-├── dok.desktop                # ícone/launcher da área de trabalho
+├── dok_cli.py                # firmware CLI (chaves, créditos)
+├── dok                        # atalho pra rodar o CLI (./dok ...)
+├── paths.py                    # resolve caminhos (funciona empacotado ou não)
 ├── requirements.txt
+├── agents/
+│   └── agent_loop.py            # loop de decisão-ação: modelo → tool call → MCP → modelo
+├── core/                     # regras estáveis do agente (context, permissions, usage, verification)
+├── providers/                 # abstração de provedor (openrouter.py, anthropic.py)
+├── tools/
+│   └── registry.py             # converte ferramentas MCP pro formato do provider
+├── mcp_client/
+│   └── client.py                # conecta no servidor dok-tools (stdio)
+├── storage/                   # toda a persistência local (SQLite)
+│   ├── chat_store.py             # múltiplas conversas (até 12, SQLite)
+│   ├── thread_store.py           # histórico de conversa única (Projetos)
+│   ├── usage_store.py            # consumo de tokens
+│   └── migrate_chats_json_to_sqlite.py   # roda uma vez, migra o chats.json antigo
+├── scripts/
+│   └── manga_scrape.py          # baixa páginas de mangá da web pro Oráculo (dok-tools)
+├── packaging/
+│   ├── build_windows.bat        # gera dok.exe (rodar no Windows)
+│   ├── build_linux.sh            # gera o binário Linux (rodar no Pi)
+│   └── dok.desktop              # ícone/launcher da área de trabalho
+├── docs/
+│   └── README-ARCHITECTURE.md   # visão geral da arquitetura Python
 ├── config/
-│   └── config.yaml         # personalidade, chaves, modelo, clima
+│   └── config.yaml            # personalidade, chaves, modelo, clima
 ├── data/
-│   └── chat.json             # histórico da conversa (criado automaticamente)
+│   └── chats.db                # conversas (criado automaticamente)
 ├── templates/
-│   ├── index.html            # tela de boas-vindas (clima/hora)
-│   └── dok.html                # tela do DOK (sidebar de conversas + chat)
-└── static/
-    ├── css/style.css           # tela de boas-vindas
-    ├── css/dok.css               # tela de chat
-    ├── js/app.js
-    ├── js/dok.js
-    ├── icon/dok.png
-    └── generated/               # QR code de créditos gerado
+│   ├── index.html              # tela de boas-vindas (clima/hora)
+│   └── dok.html                 # tela do DOK (sidebar de conversas + chat)
+├── static/
+│   ├── css/style.css            # tela de boas-vindas
+│   ├── css/dok.css                # tela de chat
+│   ├── js/app.js
+│   ├── js/dok.js
+│   ├── icon/dok.png
+│   └── generated/                # QR code de créditos gerado
+└── dok-tools/                # servidor MCP separado: ferramentas reais (filesystem, oracle, rede...)
 ```
 
 ## O app de verdade — executável com ícone (Windows e Pi)
@@ -63,7 +71,7 @@ de empacotamento, não é limitação específica daqui).
 ### No notebook Windows
 
 ```
-build_windows.bat
+packaging\build_windows.bat
 ```
 
 Isso instala as dependências e gera `dist\dok.exe`. Depois:
@@ -83,8 +91,8 @@ atalho)**.
 ### No Raspberry Pi
 
 ```
-chmod +x build_linux.sh
-./build_linux.sh
+chmod +x packaging/build_linux.sh
+./packaging/build_linux.sh
 ```
 
 Isso instala as dependências de sistema (WebKitGTK, necessário pra
@@ -95,7 +103,7 @@ Depois:
 cp -r config dist/
 ```
 
-Ajuste `dok.desktop` pro caminho real (`Exec=/home/SEU_USUARIO/dok/dist/dok`),
+Ajuste `packaging/dok.desktop` pro caminho real (`Exec=/home/SEU_USUARIO/dok/dist/dok`),
 dê permissão, e copie pra área de trabalho — mesmo processo de sempre
 (`chmod +x`, `cp` pra `~/Desktop` e `~/.local/share/applications`,
 `gio set ... metadata::trusted true`).
@@ -228,7 +236,7 @@ que aponta pro Console oficial da Anthropic, você paga pelo celular.
 
 ## Ícone na área de trabalho
 
-Mesmo processo de antes: ajuste os caminhos em `dok.desktop`, dê
+Mesmo processo de antes: ajuste os caminhos em `packaging/dok.desktop`, dê
 permissão de execução, copie pra `~/Desktop` e
 `~/.local/share/applications`, e confie o arquivo com
 `gio set ... metadata::trusted true`.

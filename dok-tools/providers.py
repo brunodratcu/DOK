@@ -52,6 +52,13 @@ class AnthropicProvider:
         self.api_key = api_key
 
     def chat(self, *, model, system_prompt, content, max_tokens=1500):
+        """
+        Retorna sempre um dict: {"text", "finish_reason", "usage",
+        "http_status", "error"} — nunca lança por causa de resposta
+        vazia ou HTTP != 200, quem chama decide o que fazer (é assim
+        que dá pra detectar resposta vazia e logar o motivo real,
+        em vez de aceitar silenciosamente).
+        """
         if not self.api_key:
             raise ProviderError("Chave da Anthropic não configurada em dok-tools/config/config.yaml")
         payload = {
@@ -59,10 +66,28 @@ class AnthropicProvider:
             "messages": [{"role": "user", "content": normalize_content(content, "anthropic")}],
         }
         headers = {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
-        resp = requests.post(ANTHROPIC_URL, headers=headers, json=payload, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
-        return "\n".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        try:
+            resp = requests.post(ANTHROPIC_URL, headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as exc:
+            return {"text": "", "finish_reason": "request_exception", "usage": {}, "http_status": None, "error": str(exc)}
+
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+
+        if resp.status_code != 200:
+            error_msg = data.get("error", {}).get("message", resp.text[:500])
+            return {"text": "", "finish_reason": "http_error", "usage": {}, "http_status": resp.status_code, "error": error_msg}
+
+        text = "\n".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        return {
+            "text": text,
+            "finish_reason": data.get("stop_reason"),
+            "usage": data.get("usage", {}),
+            "http_status": resp.status_code,
+            "error": None,
+        }
 
 
 class OpenRouterProvider:
@@ -85,10 +110,29 @@ class OpenRouterProvider:
             "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/brunodratcu/dok", "X-Title": "DOK Oracle",
         }
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
-        resp.raise_for_status()
-        choice = (resp.json().get("choices") or [{}])[0]
-        return (choice.get("message", {}).get("content") or "").strip()
+        try:
+            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as exc:
+            return {"text": "", "finish_reason": "request_exception", "usage": {}, "http_status": None, "error": str(exc)}
+
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+
+        if resp.status_code != 200:
+            error_msg = data.get("error", {}).get("message", resp.text[:500])
+            return {"text": "", "finish_reason": "http_error", "usage": {}, "http_status": resp.status_code, "error": error_msg}
+
+        choice = (data.get("choices") or [{}])[0]
+        text = (choice.get("message", {}).get("content") or "").strip()
+        return {
+            "text": text,
+            "finish_reason": choice.get("finish_reason"),
+            "usage": data.get("usage", {}),
+            "http_status": resp.status_code,
+            "error": None,
+        }
 
 
 def create_provider(cfg):

@@ -10,10 +10,10 @@ from flask import Flask, render_template, jsonify, request
 
 from providers import create_provider
 from providers.openrouter import list_free_models
-import chat_store
+from storage import chat_store
 import paths
 from agents import agent_loop
-import usage_store
+from storage import usage_store
 
 CONFIG_PATH = paths.data_path("config", "config.yaml")
 

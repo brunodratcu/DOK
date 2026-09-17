@@ -5,6 +5,10 @@
 # Sem venv: instala tudo no Python global do sistema.
 set -e
 
+# Este script agora mora em packaging/ — entra na raiz do projeto antes
+# de rodar qualquer coisa, pra funcionar não importa de onde for chamado.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
 echo "=== Dependências de sistema (webview precisa do WebKitGTK) ==="
 sudo apt update
 sudo apt install -y python3-gi gir1.2-webkit2-4.1

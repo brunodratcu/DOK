@@ -3,3 +3,5 @@ requests==2.32.3
 python-whois>=0.9.4
 PyMuPDF==1.24.11
 PyYAML==6.0.2
+pytesseract==0.3.13
+Pillow==10.4.0
