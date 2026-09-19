@@ -312,12 +312,15 @@ def _call_with_retry(provider, *, model, system_prompt, content, max_tokens, loc
 def _analyze_block(images_b64, work, chapter, block_index, total_blocks, provider, model):
     content = [{"type": "text", "text": (
         f"Bloco {block_index + 1} de {total_blocks} do capítulo {chapter} da obra "
-        f"'{work}'. Liste em NOTAS COMPACTAS (não prosa, no máximo ~15 linhas) o que "
+        f"'{work}'. Liste em NOTAS COMPACTAS (não prosa, no máximo ~18 linhas) o que "
         "acontece nestas páginas: eventos (bullet curto), personagens presentes "
-        "(nomes), falas importantes (citação curta). Se alguma página não for "
-        "conteúdo de mangá (ex: propaganda, capa de site, imagem não relacionada ao "
-        "capítulo), diga isso em uma linha e ignore essa página — não recuse a "
-        "tarefa inteira por causa disso. Não invente nada."
+        "(nomes), falas importantes (citação curta), confrontos/lutas se houver "
+        "(quem ataca quem, golpe/técnica nomeada, resultado), reações visíveis "
+        "(expressão, postura — só o que está desenhado na página, não infira além "
+        "disso). Omita qualquer campo sem conteúdo na página em vez de forçar algo. "
+        "Se alguma página não for conteúdo de mangá (ex: propaganda, capa de site, "
+        "imagem não relacionada ao capítulo), diga isso em uma linha e ignore essa "
+        "página — não recuse a tarefa inteira por causa disso. Não invente nada."
     )}]
     for img in images_b64:
         content.append({"type": "image_b64", "media_type": "image/jpeg", "data": img})
@@ -338,6 +341,10 @@ def _consolidate_chapter(block_notes, work, chapter, provider, model):
         "Consolide num resumo único e coerente do capítulo, em markdown:\n"
         "**Resumo:** (parágrafo)\n**Personagens:** (lista)\n**Eventos-chave:** (lista)\n"
         "**Falas marcantes:** (lista, se houver)\n"
+        "**Confrontos:** (lista, se houver — quem, golpe, resultado)\n"
+        "**Reações marcantes:** (lista, se houver — só o que as notas descrevem como "
+        "visível na arte)\n"
+        "Omita qualquer seção sem base nas notas em vez de preenchê-la. "
         "Não invente nada além do que está nas notas acima."
     )
     return _call_with_retry(
@@ -351,7 +358,13 @@ def _consolidate_chapter(block_notes, work, chapter, provider, model):
 def _summarize_text_chapter(text, work, chapter, provider, model):
     prompt = (
         f"Resuma o capítulo {chapter} da obra '{work}' a partir deste texto, em markdown:\n"
-        "**Resumo:** (parágrafo)\n**Personagens:** (lista)\n**Eventos-chave:** (lista)\n\n"
+        "**Resumo:** (parágrafo)\n**Personagens:** (lista)\n**Eventos-chave:** (lista)\n"
+        "**Leitura nas entrelinhas (sutil):** (opcional, 1-3 frases — inferência "
+        "CAUTELOSA de tom/emoção baseada só no texto: escolha de palavras, "
+        "pontuação, contraste entre falas. Use linguagem de ressalva ('sugere', "
+        "'pode indicar'), nunca afirmação categórica. Você NÃO viu a página, só o "
+        "texto extraído por OCR — não descreva expressão, postura ou qualquer coisa "
+        "visual. Se não houver base textual clara, OMITA esta seção inteira.)\n\n"
         f"Texto:\n{text[:20000]}"
     )
     return _call_with_retry(
@@ -378,7 +391,12 @@ def _chapter_already_processed(work, chapter, file_hash):
     return f"<!-- source_hash: {file_hash} -->" in content
 
 
-def _append_chapter(work, chapter, consolidated_md, file_hash, model, total_blocks):
+def _append_chapter(work, chapter, consolidated_md, file_hash, model, total_blocks, method):
+    """`method` registra COMO o capítulo foi lido — importante porque
+    'texto-pdf' e 'ocr-imagens' usam o resumidor text-only (sem visão),
+    enquanto 'pdf-visual' viu a arte de verdade. Serve pra saber, mais
+    tarde, se vale a pena reprocessar um capítulo raspado (OCR) com a
+    versão em PDF (visual) quando ela estiver disponível."""
     path = _chapters_md_path(work)
     is_new = not os.path.exists(path)
     with open(path, "a", encoding="utf-8") as f:
@@ -386,7 +404,7 @@ def _append_chapter(work, chapter, consolidated_md, file_hash, model, total_bloc
             f.write(f"# {work}\n\n")
         f.write(f"## Capítulo {chapter}\n\n")
         f.write(f"<!-- source_hash: {file_hash} -->\n")
-        f.write(f"<!-- processado_com: {model}, blocos: {total_blocks} -->\n\n")
+        f.write(f"<!-- processado_com: {model}, blocos: {total_blocks}, fonte: {method} -->\n\n")
         f.write(f"{consolidated_md}\n\n")
 
 
@@ -401,9 +419,13 @@ def _update_work_memory(work, latest_chapter_md, provider, model):
         f"{existing or '(vazia — este é o primeiro capítulo)'}\n\n"
         f"Capítulo recém-processado:\n{latest_chapter_md}\n\n"
         "Atualize a memória cumulativa incorporando esse capítulo, em markdown com "
-        "seções: Personagens, Relações, Linha do Tempo, Conflitos, Revelações e "
-        "Mistérios, Estado Atual da História. Preserve o conhecimento anterior; "
-        "só adicione o que está sustentado pelos capítulos."
+        "seções: Personagens, Relações, Linha do Tempo, Conflitos, Consequências "
+        "(o que mudou de forma duradoura por causa dos eventos — poder perdido/"
+        "ganho, morte, aliança rompida, status alterado), Revelações e Mistérios, "
+        "Estado Atual da História. Preserve o conhecimento anterior; só adicione o "
+        "que está sustentado pelos capítulos. Se o capítulo trouxer uma seção "
+        "'Leitura nas entrelinhas', trate como inferência de menor confiança — "
+        "nunca escreva como fato consumado."
     )
     ok, new_content, detail = _call_with_retry(
         provider, model=model,
@@ -503,7 +525,7 @@ def oracle_ingest(folder_path: str, block_size: int = DEFAULT_BLOCK_SIZE):
                 if not ok:
                     report["chapters_failed"].append(f"Capítulo {chapter}: {consolidated}")
                     continue
-                _append_chapter(work, chapter, consolidated, file_hash, model, total_blocks)
+                _append_chapter(work, chapter, consolidated, file_hash, model, total_blocks, method="ocr-imagens")
                 work_ok, _ = _update_work_memory(work, consolidated, provider, model)
                 if not work_ok:
                     report["errors"].append(f"Capítulo {chapter} salvo, mas atualização da memória da obra falhou.")
@@ -519,6 +541,7 @@ def oracle_ingest(folder_path: str, block_size: int = DEFAULT_BLOCK_SIZE):
                 text = _extract_pdf_text(item["path"])
                 ok, consolidated, detail = _summarize_text_chapter(text, work, chapter, provider, model)
                 total_blocks = 1
+                method = "texto-pdf"
                 if not ok:
                     report["chapters_failed"].append(f"Capítulo {chapter}: {consolidated}")
                     continue
@@ -526,11 +549,12 @@ def oracle_ingest(folder_path: str, block_size: int = DEFAULT_BLOCK_SIZE):
                 ok, consolidated, file_hash, total_blocks = _process_visual_chapter(
                     item, work, chapter, provider, model, block_size, report["log"]
                 )
+                method = "pdf-visual"
                 if not ok:
                     report["chapters_failed"].append(consolidated)
                     continue
 
-            _append_chapter(work, chapter, consolidated, file_hash, model, total_blocks)
+            _append_chapter(work, chapter, consolidated, file_hash, model, total_blocks, method=method)
             work_ok, _ = _update_work_memory(work, consolidated, provider, model)
             if not work_ok:
                 report["errors"].append(f"Capítulo {chapter} salvo, mas atualização da memória da obra falhou.")
